@@ -1,6 +1,8 @@
-const CACHE = 'respira-v15';
+const CACHE = 'respira-v16';
 const STATIC = [
-  './assets/logos/gestorpro-icon.png',
+  './assets/logos/icon-192.png',
+  './assets/logos/icon-512.png',
+  './assets/logos/apple-touch-180.png',
   './assets/logos/gestorpro-symbol.png',
   './manifest.webmanifest',
 ];
