@@ -651,7 +651,7 @@ function renderDebts() {
       <p>Foque em uma por vez. Agora: <strong>${escapeHtml(attack[0].creditor)}</strong> · ${brl(attack[0].balance)}. Juros = só o mínimo. Congelada = não pague agora.</p>
     </div></div>` : ''}
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Dívidas</h2><p>Pagar reduz o saldo · novas dívidas pelo botão Adicionar</p></div></div>
+      <div class="card-header"><div><h2>Dívidas</h2><p>Credores com saldo (cartão, banco, acordo). Parcelas de compra ficam em Compromissos.</p></div></div>
       ${summary.debts.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
         <th>Credor</th><th class="number">Saldo</th><th class="number">Mensal</th><th class="number">Juros/custo</th><th>Prioridade</th><th>Status</th><th></th>
       </tr></thead><tbody>
@@ -668,7 +668,7 @@ function renderDebts() {
             <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${debt.id}">Excluir</button>
           </div></td>
         </tr>`).join('')}
-      </tbody></table></div>` : emptyState('◎', 'Sem dívidas', 'Inclua pelo botão Adicionar → Dívida.')}
+      </tbody></table></div>` : emptyState('◈', 'Nenhuma dívida cadastrada', 'Use Adicionar → Dívida para credores com saldo. Compras parceladas aparecem em Compromissos e no Mês.', 'Adicionar dívida', 'add-debt')}
     </section>`;
 }
 
