@@ -497,10 +497,56 @@ function buildDebtEntry(debt, monthKey) {
   });
 }
 
+function entryHasPayments(entry) {
+  return Array.isArray(entry?.payments) && entry.payments.length > 0;
+}
+
+function entryBelongsToMonth(entry, monthKey) {
+  const dueMonth = String(entry?.dueDate || '').slice(0, 7);
+  return !dueMonth || dueMonth === monthKey;
+}
+
+/** Remove lançamentos fantasmas (ex.: parcela de agosto presa em julho). */
+export function scrubMonthEntries(state, monthKey) {
+  const month = state.months[monthKey];
+  if (!month || !Array.isArray(month.entries)) return;
+  const commitmentsById = new Map((state.commitments || []).map((item) => [item.id, item]));
+  const debtsById = new Map((state.debts || []).map((item) => [item.id, item]));
+
+  month.entries = month.entries.filter((raw) => {
+    const entry = normalizeEntry(raw);
+    if (entry.commitmentId) {
+      const commitment = commitmentsById.get(entry.commitmentId);
+      if (!commitment) return entryHasPayments(entry);
+      if (!commitmentActiveInMonth(commitment, monthKey)) return entryHasPayments(entry);
+      // Corrige vencimento para o mês da pasta
+      const dueDay = commitment.dueDay
+        || Number(String(commitment.nextDueDate || entry.dueDate || '').slice(8, 10))
+        || 1;
+      raw.dueDate = dueDateInMonth(monthKey, dueDay);
+      return true;
+    }
+    if (entry.debtId) {
+      const debt = debtsById.get(entry.debtId);
+      if (!debt) return entryHasPayments(entry);
+      if ([DEBT_STATUS.PAID, DEBT_STATUS.RENEGOTIATED, DEBT_STATUS.FROZEN].includes(debt.status)) {
+        return entryHasPayments(entry);
+      }
+      if (!(toNumber(debt.plannedMonthly) > 0)) return entryHasPayments(entry);
+      raw.dueDate = dueDateInMonth(monthKey, 10);
+      return true;
+    }
+    // Lançamento manual: só fica se a data for deste mês (pago mantém histórico)
+    if (!entryBelongsToMonth(entry, monthKey)) return entryHasPayments(entry);
+    return true;
+  });
+}
+
 export function materializeCommitments(state, monthKey) {
   const month = state.months[monthKey];
   if (!month) return;
   if (!Array.isArray(month.skippedCommitmentIds)) month.skippedCommitmentIds = [];
+  scrubMonthEntries(state, monthKey);
   const existingCommit = new Set(month.entries.filter((item) => item.commitmentId).map((item) => item.commitmentId));
   for (const commitment of state.commitments) {
     if (!commitmentActiveInMonth(commitment, monthKey)) continue;
@@ -605,7 +651,8 @@ export function overview(state, monthKey = state.currentMonth) {
   const pendingOut = entries.filter((item) =>
     [ENTRY_TYPES.BILL, ENTRY_TYPES.INSTALLMENT, ENTRY_TYPES.DEBT].includes(item.type)
     && item.status !== PAY_STATUS.CANCELLED
-    && item.status !== PAY_STATUS.PAID);
+    && item.status !== PAY_STATUS.PAID
+    && entryBelongsToMonth(item, monthKey));
   const totalPending = pendingOut.reduce((sum, item) => sum + item.pendingAmount, 0);
   const { remainingSave } = remainingSaveAndFrozen(state, entries);
   const safety = toNumber(state.settings.safetyMargin);
@@ -703,10 +750,18 @@ export function dailyPlan(state, monthKey = state.currentMonth) {
 
 function projectedEntriesForMonth(state, monthKey) {
   const existing = state.months[monthKey] ? peekMonthEntries(state, monthKey) : [];
-  const byCommit = new Map(existing.filter((e) => e.commitmentId).map((e) => [e.commitmentId, e]));
-  const byDebt = new Map(existing.filter((e) => e.debtId).map((e) => [e.debtId, e]));
+  const byCommit = new Map(
+    existing
+      .filter((e) => e.commitmentId && entryBelongsToMonth(e, monthKey))
+      .map((e) => [e.commitmentId, e]),
+  );
+  const byDebt = new Map(
+    existing
+      .filter((e) => e.debtId && entryBelongsToMonth(e, monthKey))
+      .map((e) => [e.debtId, e]),
+  );
   const skipped = new Set(state.months[monthKey]?.skippedCommitmentIds || []);
-  const list = existing.filter((e) => !e.commitmentId && !e.debtId);
+  const list = existing.filter((e) => !e.commitmentId && !e.debtId && entryBelongsToMonth(e, monthKey));
 
   for (const commitment of state.commitments) {
     if (skipped.has(commitment.id)) continue;

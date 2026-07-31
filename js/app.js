@@ -338,6 +338,7 @@ function launchApp() {
   updateMonthNav();
   currentView = 'overview';
   ensureMonth(state, state.currentMonth);
+  saveVault(state).catch(() => {});
   render();
   resetIdleTimer();
 }
@@ -1306,20 +1307,23 @@ async function saveCreate(data) {
       paymentLog: [],
     };
     state.commitments.push(commitment);
-    month.entries.push({
-      id: makeId('entry'),
-      commitmentId: commitment.id,
-      type: ENTRY_TYPES.INSTALLMENT,
-      name: commitment.name,
-      amount: commitment.installmentValue,
-      category: commitment.category,
-      dueDate: commitment.nextDueDate,
-      installmentNumber: current,
-      totalInstallments: total,
-      note: commitment.note,
-      payments: [],
-      status: PAY_STATUS.PENDING,
-    });
+    const startKey = String(commitment.nextDueDate || '').slice(0, 7);
+    if (startKey === state.currentMonth || commitmentActiveInMonth(commitment, state.currentMonth)) {
+      month.entries.push({
+        id: makeId('entry'),
+        commitmentId: commitment.id,
+        type: ENTRY_TYPES.INSTALLMENT,
+        name: commitment.name,
+        amount: commitment.installmentValue,
+        category: commitment.category,
+        dueDate: dueDateInMonth(state.currentMonth, commitment.dueDay),
+        installmentNumber: current,
+        totalInstallments: total,
+        note: commitment.note,
+        payments: [],
+        status: PAY_STATUS.PENDING,
+      });
+    }
     return;
   }
   if (type === 'bill' && data.recurring === 'on') {
@@ -1791,11 +1795,17 @@ async function shiftMonth(delta) {
 }
 
 async function goToMonth(target) {
-  if (!target || target === state.currentMonth) {
+  if (!target) {
     updateMonthNav();
     return;
   }
   ensureMonth(state, target);
+  if (target === state.currentMonth) {
+    await saveVault(state);
+    render();
+    updateMonthNav();
+    return;
+  }
   state.currentMonth = target;
   const stamp = state.updatedAt;
   state = normalizeState(state);
