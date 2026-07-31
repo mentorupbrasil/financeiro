@@ -555,33 +555,82 @@ function renderMonth() {
   const entries = monthEntries(state, state.currentMonth, monthFilter);
   const filters = [
     ['all', 'Tudo'],
-    ['pending', 'Pendente'],
+    ['pending', 'Aberto'],
     ['paid', 'Pago'],
-    ['overdue', 'Atrasado'],
-    ['in', 'Entradas'],
-    ['out', 'Saídas'],
+    ['overdue', 'Atraso'],
+    ['in', 'Entra'],
+    ['out', 'Sai'],
   ];
+  const openTotal = entries
+    .filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status !== PAY_STATUS.PAID && item.status !== PAY_STATUS.CANCELLED)
+    .reduce((sum, item) => sum + Number(item.pendingAmount || item.amount || 0), 0);
+  const paidTotal = entries
+    .filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status === PAY_STATUS.PAID)
+    .reduce((sum, item) => sum + Number(item.paidAmount || item.amount || 0), 0);
+
   return `
     <div class="segmented" role="tablist" aria-label="Filtrar lançamentos">
       ${filters.map(([id, label]) => `<button class="segmented__item ${monthFilter === id ? 'is-active' : ''}" type="button" role="tab" aria-selected="${monthFilter === id}" data-action="filter" data-id="${id}"><span>${label}</span></button>`).join('')}
     </div>
-    <section class="card section-gap">
-      ${entries.length ? `<div class="list list--actions">${entries.map((item) => `
-        <div class="list-item entry-row">
-          <div class="list-main">
-            <strong>${escapeHtml(item.name)}</strong>
-            <small>${escapeHtml(TYPE_LABEL[item.type] || item.type)} · ${escapeHtml(item.category)} · Vence ${formatDateBR(item.dueDate)}${item.installmentNumber ? ` · Parcela ${item.installmentNumber} de ${item.totalInstallments}` : ''}${item.certainty ? ` · ${certaintyLabel(item.certainty)}` : ''}</small>
-          </div>
-          <div class="list-value">${brl(item.amount)}<small>${statusPill(item.status)}</small></div>
-          <div class="row-actions">
-            ${item.status !== PAY_STATUS.PAID && item.status !== PAY_STATUS.CANCELLED ? `<button class="button button--primary button--tiny" type="button" data-action="pay-full" data-id="${item.id}">Pago</button>` : ''}
-            ${item.status !== PAY_STATUS.PAID && item.status !== PAY_STATUS.CANCELLED ? `<button class="button button--secondary button--tiny" type="button" data-action="pay-partial" data-id="${item.id}">Parcial</button>` : ''}
-            ${item.paidAmount > 0 ? `<button class="button button--ghost button--tiny" type="button" data-action="undo-pay" data-id="${item.id}">Desfazer</button>` : ''}
-            <button class="button button--ghost button--tiny" type="button" data-action="edit-entry" data-id="${item.id}">Editar</button>
-            <button class="button button--ghost button--tiny" type="button" data-action="delete-entry" data-id="${item.id}">Excluir</button>
-          </div>
-        </div>`).join('')}</div>` : emptyState('▤', 'Nada neste filtro', 'Use o botão Adicionar no topo para incluir itens.')}
-    </section>`;
+    ${entries.length ? `
+      <div class="month-summary section-gap">
+        <div><span>Em aberto</span><strong class="${openTotal ? 'negative' : ''}">${brl(openTotal)}</strong></div>
+        <div><span>Já pago</span><strong class="positive">${brl(paidTotal)}</strong></div>
+        <div><span>Itens</span><strong>${entries.length}</strong></div>
+      </div>
+      <section class="month-list section-gap">
+        ${entries.map((item) => renderMonthItem(item)).join('')}
+      </section>` : `<section class="card section-gap">${emptyState('▤', 'Nada neste filtro', 'Use Adicionar no topo para incluir itens.')}</section>`}`;
+}
+
+function renderMonthItem(item) {
+  const due = parseMonthDate(item.dueDate);
+  const isIn = item.type === ENTRY_TYPES.INCOME;
+  const done = item.status === PAY_STATUS.PAID;
+  const overdue = item.status === PAY_STATUS.OVERDUE;
+  const meta = [
+    item.installmentNumber ? `${item.installmentNumber}/${item.totalInstallments}` : (item.category || TYPE_LABEL[item.type] || ''),
+    item.certainty ? certaintyLabel(item.certainty) : '',
+  ].filter(Boolean).join(' · ');
+  const payLabel = isIn ? 'Recebi' : 'Paguei';
+
+  return `<article class="month-item ${done ? 'is-done' : ''} ${overdue ? 'is-overdue' : ''} ${isIn ? 'is-in' : ''}">
+    <div class="month-item__date" aria-hidden="true">
+      <strong>${due.day}</strong>
+      <span>${due.month}</span>
+    </div>
+    <div class="month-item__main">
+      <div class="month-item__row">
+        <div class="month-item__copy">
+          <h3>${escapeHtml(item.name)}</h3>
+          <p>${escapeHtml(meta)}</p>
+        </div>
+        <div class="month-item__value ${isIn ? 'positive' : (overdue ? 'negative' : '')}">${brl(item.amount)}</div>
+      </div>
+      <div class="month-item__bar">
+        <span class="month-item__status">${statusWord(item.status, isIn)}</span>
+        <div class="month-item__actions">
+          ${!done && item.status !== PAY_STATUS.CANCELLED ? `<button class="button button--primary button--tiny" type="button" data-action="pay-full" data-id="${item.id}">${payLabel}</button>` : ''}
+          <button class="button button--ghost button--tiny" type="button" data-action="entry-more" data-id="${item.id}">Mais</button>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function parseMonthDate(value) {
+  const date = value ? new Date(`${String(value).slice(0, 10)}T12:00:00`) : new Date();
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = date.toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+  return { day, month };
+}
+
+function statusWord(status, isIn = false) {
+  if (status === PAY_STATUS.PAID) return isIn ? 'Recebido' : 'Pago';
+  if (status === PAY_STATUS.OVERDUE) return 'Atrasado';
+  if (status === PAY_STATUS.PARTIAL) return 'Parcial';
+  if (status === PAY_STATUS.CANCELLED) return 'Cancelado';
+  return isIn ? 'A receber' : 'Em aberto';
 }
 
 function certaintyLabel(value) {
@@ -1282,6 +1331,11 @@ async function handleViewClick(event) {
   if (action === 'debt-filter') { debtFilter = id; render(); return; }
   if (action === 'open-add') return openAddMenu();
   if (action === 'add-debt') return openDebtForm();
+  if (action === 'entry-more') {
+    const row = month.entries.find((item) => item.id === id) || monthEntries(state, state.currentMonth, 'all').find((item) => item.id === id);
+    if (row) openEntryMore(row);
+    return;
+  }
   if (action === 'conflict-use-cloud') return resolveConflictCloud();
   if (action === 'conflict-push-local') return resolveConflictLocal();
 
@@ -1486,6 +1540,23 @@ async function handleViewClick(event) {
     toast('Zerado', 'Pode começar a lançar.');
     location.reload();
   }
+}
+
+function openEntryMore(entry) {
+  const isIn = entry.type === ENTRY_TYPES.INCOME;
+  refs.dialogEyebrow.textContent = 'AÇÕES';
+  refs.dialogTitle.textContent = entry.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  const actions = [];
+  if (entry.status !== PAY_STATUS.PAID && entry.status !== PAY_STATUS.CANCELLED && !isIn) {
+    actions.push(['pay-partial', 'Pagamento parcial']);
+  }
+  if (entry.paidAmount > 0) actions.push(['undo-pay', 'Desfazer pagamento']);
+  actions.push(['edit-entry', 'Editar']);
+  actions.push(['delete-entry', 'Excluir']);
+  refs.dialogFields.innerHTML = actions.map(([action, label]) => `<button class="choice-card" type="button" data-action="${action}" data-id="${entry.id}" data-from-menu="1"><strong>${label}</strong></button>`).join('');
+  showEntityDialog();
 }
 
 function openPartialPay(entry) {
