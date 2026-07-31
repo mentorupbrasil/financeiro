@@ -1,0 +1,14 @@
+{
+  "name": "Respira — Comando Financeiro",
+  "short_name": "Respira",
+  "description": "Sistema pessoal para organizar receitas, contas, dívidas, envelopes e projeções.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f7f8",
+  "theme_color": "#0f172a",
+  "lang": "pt-BR",
+  "icons": [
+    {"src":"assets/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}

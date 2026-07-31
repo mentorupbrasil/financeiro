@@ -1,0 +1,8 @@
+# Dados privados e backups
+*DADOS_INICIAIS*.json
+respira-backup-*.json
+respira-dados-*.json
+
+# Sistema
+.DS_Store
+Thumbs.db

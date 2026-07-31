@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="Sistema pessoal para organizar receitas, contas, dívidas, envelopes e projeções." />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>Respira — Comando Financeiro</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <noscript>Este sistema precisa de JavaScript ativado.</noscript>
+
+  <div id="boot-screen" class="boot-screen" aria-live="polite">
+    <div class="brand-mark" aria-hidden="true">R</div>
+    <strong>Respira</strong>
+    <span>Preparando seu comando financeiro…</span>
+  </div>
+
+  <div id="lock-screen" class="lock-screen hidden" role="dialog" aria-modal="true" aria-labelledby="lock-title">
+    <div class="lock-card">
+      <div class="brand-mark brand-mark--large" aria-hidden="true">R</div>
+      <p class="eyebrow">COMANDO FINANCEIRO</p>
+      <h1 id="lock-title">Entre no Respira</h1>
+      <p id="lock-copy" class="muted">Seus dados ficam criptografados neste dispositivo.</p>
+      <form id="unlock-form" class="stack" autocomplete="off">
+        <label class="field">
+          <span>PIN</span>
+          <input id="unlock-pin" inputmode="numeric" type="password" minlength="4" maxlength="12" autocomplete="current-password" placeholder="Digite seu PIN" required />
+        </label>
+        <button class="button button--primary button--large" type="submit">Desbloquear</button>
+        <button id="reset-local-data" class="button button--ghost" type="button">Esqueci o PIN / apagar dados locais</button>
+      </form>
+      <p id="unlock-error" class="form-error hidden" role="alert"></p>
+    </div>
+  </div>
+
+  <div id="setup-screen" class="setup-screen hidden" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <div class="setup-card">
+      <div class="setup-copy">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">R</div>
+          <span>RESPIRA</span>
+        </div>
+        <p class="eyebrow">SAÍDA DO BURACO</p>
+        <h1 id="setup-title">Seu dinheiro precisa de um comando, não de culpa.</h1>
+        <p>Organize o mês na ordem certa: contas obrigatórias, segurança, ataque às dívidas e só depois dinheiro livre.</p>
+        <ul class="feature-list">
+          <li>Dados criptografados no dispositivo</li>
+          <li>Funciona offline e pode ser instalado</li>
+          <li>Backup e restauração em arquivo</li>
+        </ul>
+      </div>
+      <form id="setup-form" class="setup-form" autocomplete="off">
+        <div>
+          <p class="step-label">PASSO 1 DE 2</p>
+          <h2>Crie um PIN privado</h2>
+          <p class="muted">Ele protege os dados armazenados neste navegador. Não existe recuperação.</p>
+        </div>
+        <label class="field">
+          <span>Novo PIN</span>
+          <input id="setup-pin" inputmode="numeric" type="password" minlength="4" maxlength="12" placeholder="4 a 12 números" required />
+        </label>
+        <label class="field">
+          <span>Confirmar PIN</span>
+          <input id="setup-pin-confirm" inputmode="numeric" type="password" minlength="4" maxlength="12" placeholder="Repita o PIN" required />
+        </label>
+        <label class="check-row">
+          <input id="setup-ack" type="checkbox" required />
+          <span>Entendi que, se eu esquecer o PIN, precisarei restaurar um backup.</span>
+        </label>
+        <button class="button button--primary button--large" type="submit">Criar meu comando</button>
+        <p id="setup-error" class="form-error hidden" role="alert"></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar" aria-label="Navegação principal">
+      <a href="#dashboard" class="brand-row sidebar-brand" data-nav="dashboard" aria-label="Ir para visão geral">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <div><strong>Respira</strong><small>Comando financeiro</small></div>
+      </a>
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="dashboard" type="button"><span aria-hidden="true">⌂</span><span>Visão geral</span></button>
+        <button class="nav-item" data-view="incomes" type="button"><span aria-hidden="true">↗</span><span>Entradas</span></button>
+        <button class="nav-item" data-view="bills" type="button"><span aria-hidden="true">▤</span><span>Contas</span></button>
+        <button class="nav-item" data-view="debts" type="button"><span aria-hidden="true">◎</span><span>Dívidas</span></button>
+        <button class="nav-item" data-view="envelopes" type="button"><span aria-hidden="true">▱</span><span>Envelopes</span></button>
+        <button class="nav-item" data-view="projection" type="button"><span aria-hidden="true">⌁</span><span>Projeção</span></button>
+        <button class="nav-item" data-view="settings" type="button"><span aria-hidden="true">⚙</span><span>Configurações</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="privacy-note"><span class="status-dot"></span><span>Dados privados neste aparelho</span></div>
+        <button id="lock-now" class="button button--ghost button--full" type="button">Bloquear agora</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="view-eyebrow">COMANDO DO MÊS</p>
+          <h1 id="view-title">Visão geral</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="month-picker" aria-label="Mês de referência">
+            <span>Mês</span>
+            <input id="month-input" type="month" />
+          </label>
+          <button id="install-app" class="button button--secondary hidden" type="button">Instalar app</button>
+          <button id="quick-add" class="button button--primary" type="button"><span aria-hidden="true">＋</span> Adicionar</button>
+        </div>
+      </header>
+
+      <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+      <section id="view-root" class="view-root" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <dialog id="entity-dialog" class="dialog">
+    <form id="entity-form" method="dialog" class="dialog-card">
+      <div class="dialog-header">
+        <div><p id="dialog-eyebrow" class="eyebrow">NOVO REGISTRO</p><h2 id="dialog-title">Adicionar</h2></div>
+        <button class="icon-button" value="cancel" type="button" data-close-dialog aria-label="Fechar">×</button>
+      </div>
+      <div id="dialog-fields" class="dialog-fields"></div>
+      <p id="dialog-error" class="form-error hidden" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button--ghost" value="cancel" type="button" data-close-dialog>Cancelar</button>
+        <button id="dialog-submit" class="button button--primary" value="default" type="submit">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog dialog--small">
+    <form method="dialog" class="dialog-card">
+      <div class="dialog-header"><div><p class="eyebrow">CONFIRMAÇÃO</p><h2 id="confirm-title">Tem certeza?</h2></div></div>
+      <p id="confirm-copy" class="muted"></p>
+      <div class="dialog-actions">
+        <button class="button button--ghost" value="cancel">Cancelar</button>
+        <button id="confirm-action" class="button button--danger" value="confirm">Confirmar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <input id="import-file" class="visually-hidden" type="file" accept="application/json,.json" />
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
