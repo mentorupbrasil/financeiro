@@ -786,14 +786,6 @@ function renderDebts() {
   };
 
   return `
-    <div class="callout">
-      <div class="callout-icon">◈</div>
-      <div>
-        <strong>Tudo aqui é dívida — o que muda é o jeito de pagar</strong>
-        <p>Fixa = todo mês (internet). Parcelada = em X vezes. Atacar = quando sobrar. Só juros = mínimo. Congelada = não paga agora.</p>
-      </div>
-    </div>
-
     <section class="grid grid--4 section-gap">
       ${metric('Saldos abertos', balanceTotal, balanceTotal ? 'negative' : '')}
       ${metric('Parcelas do mês', parcelMonth, parcelMonth ? 'negative' : '')}
