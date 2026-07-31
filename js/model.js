@@ -3,7 +3,7 @@ const DEFAULT_SETTINGS = {
   dailyNetValue: 0,
   saveGoal: 0,
   frozenDebtFund: 0,
-  lockAfterMinutes: 15,
+  lockAfterMinutes: 0,
   ownerName: '',
 };
 
@@ -371,7 +371,7 @@ export function normalizeState(input) {
   state.settings.dailyNetValue = Math.max(0, toNumber(state.settings.dailyNetValue, 0));
   state.settings.saveGoal = Math.max(0, toNumber(state.settings.saveGoal, 0));
   state.settings.frozenDebtFund = Math.max(0, toNumber(state.settings.frozenDebtFund, 0));
-  state.settings.lockAfterMinutes = Math.max(0, toNumber(state.settings.lockAfterMinutes, 15));
+  state.settings.lockAfterMinutes = Math.max(0, toNumber(state.settings.lockAfterMinutes, 0));
   state.settings.ownerName = String(state.settings.ownerName || '');
 
   let debts = Array.isArray(state.debts) ? state.debts.map(normalizeDebt) : [];

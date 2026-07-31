@@ -4,7 +4,7 @@ import { neon } from '@neondatabase/serverless';
 const PIN = process.env.APP_PIN || '';
 const SESSION_SECRET = process.env.SESSION_SECRET || PIN || 'respira-session';
 const COOKIE = 'respira_session';
-const MAX_AGE_SEC = 60 * 60 * 12;
+const MAX_AGE_SEC = 60 * 60 * 24 * 90;
 
 export function sql() {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL não configurada no servidor.');

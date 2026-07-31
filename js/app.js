@@ -54,6 +54,7 @@ import { applyMoneyMask, brl, emptyState, escapeHtml, metric, moneyInput, parseM
 
 const SESSION_FLAG = 'respira:session-open';
 const LOCAL_PIN_KEY = 'respira:local-key-hint';
+const NOLOCK_FLAG = 'respira:prefer-nolock';
 const REVISION_KEY = 'respira:sync-revision';
 const views = {
   overview: ['HOJE', 'Visão geral'],
@@ -117,21 +118,37 @@ async function init() {
   }
   refs.boot.classList.add('hidden');
   if (refs.unlockPin) refs.unlockPin.value = '';
-  if (sessionStorage.getItem(SESSION_FLAG) === '1') {
+
+  const rememberedPin = localStorage.getItem(LOCAL_PIN_KEY) || sessionStorage.getItem(LOCAL_PIN_KEY) || '';
+  const remembered = (localStorage.getItem(SESSION_FLAG) === '1' || sessionStorage.getItem(SESSION_FLAG) === '1') && rememberedPin;
+  if (remembered) {
     try {
       const ok = await checkSession();
       if (ok && hasVault()) {
-        const pin = sessionStorage.getItem(LOCAL_PIN_KEY) || '';
-        if (pin) {
-          await openWithPin(pin, { quiet: true, alreadyLoggedIn: true });
-          return;
-        }
+        await openWithPin(rememberedPin, { quiet: true, alreadyLoggedIn: true });
+        return;
       }
+      await openWithPin(rememberedPin, { quiet: true, alreadyLoggedIn: false });
+      return;
     } catch {
-      sessionStorage.removeItem(SESSION_FLAG);
+      clearRememberedSession();
     }
   }
   showLock();
+}
+
+function rememberSession(pin) {
+  localStorage.setItem(SESSION_FLAG, '1');
+  localStorage.setItem(LOCAL_PIN_KEY, pin);
+  sessionStorage.removeItem(SESSION_FLAG);
+  sessionStorage.removeItem(LOCAL_PIN_KEY);
+}
+
+function clearRememberedSession() {
+  localStorage.removeItem(SESSION_FLAG);
+  localStorage.removeItem(LOCAL_PIN_KEY);
+  sessionStorage.removeItem(SESSION_FLAG);
+  sessionStorage.removeItem(LOCAL_PIN_KEY);
 }
 
 function bindEvents() {
@@ -289,8 +306,7 @@ async function openWithPin(pin, { quiet = false, alreadyLoggedIn = false } = {})
     if (!quiet) toast('Pronto', 'Comece pelo botão Adicionar.');
   }
 
-  sessionStorage.setItem(SESSION_FLAG, '1');
-  sessionStorage.setItem(LOCAL_PIN_KEY, pin);
+  rememberSession(pin);
   launchApp();
 }
 
@@ -304,6 +320,20 @@ function setSyncStatus(mode, label) {
 function launchApp() {
   refs.lock.classList.add('hidden');
   refs.app.classList.remove('hidden');
+  if (!localStorage.getItem(NOLOCK_FLAG)) {
+    if (Number(state.settings.lockAfterMinutes) > 0) {
+      state.settings.lockAfterMinutes = 0;
+      state.updatedAt = new Date().toISOString();
+      saveVault(state).catch(() => {});
+      pushRemoteState(state, syncRevision).then((saved) => {
+        syncRevision = Number(saved.revision) || syncRevision + 1;
+        localStorage.setItem(REVISION_KEY, String(syncRevision));
+        if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+        return saveVault(state);
+      }).catch(() => {});
+    }
+    localStorage.setItem(NOLOCK_FLAG, '1');
+  }
   updateMonthNav();
   currentView = 'overview';
   ensureMonth(state, state.currentMonth);
@@ -318,8 +348,7 @@ async function lockApp() {
   clearTimeout(idleTimer);
   state = null;
   sessionPin = '';
-  sessionStorage.removeItem(SESSION_FLAG);
-  sessionStorage.removeItem(LOCAL_PIN_KEY);
+  clearRememberedSession();
   showLock();
 }
 
@@ -673,7 +702,7 @@ function renderSettings() {
           <label class="field"><span>Meta mensal para guardar</span>${moneyInput('saveGoal', s.saveGoal || 0, { required: true })}</label>
           <label class="field"><span>Fundo mensal dívidas congeladas</span>${moneyInput('frozenDebtFund', s.frozenDebtFund || 0, { required: true })}</label>
           <label class="field"><span>Margem mínima de segurança</span>${moneyInput('safetyMargin', s.safetyMargin, { required: true })}</label>
-          <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /><small class="muted" style="margin-top:-2px">0 = nunca bloquear sozinho</small></label>
+          <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /><small class="muted" style="margin-top:-2px">0 = ficar logado (recomendado no uso pessoal)</small></label>
           <label class="field"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" placeholder="Aparece na visão geral" /></label>
         </div>
         <button class="button button--primary" type="submit">Salvar</button>
@@ -1355,7 +1384,7 @@ async function handleViewClick(event) {
     wipeVault();
     await createVault(sessionPin, empty);
     state = empty;
-    sessionStorage.removeItem(SESSION_FLAG);
+    clearRememberedSession();
     toast('Zerado', 'Pode começar a lançar.');
     location.reload();
   }
