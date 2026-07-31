@@ -843,7 +843,13 @@ function renderDebts() {
               `}
             </div>
           </div>`).join('')}
-        </div>` : emptyState('◈', 'Nada neste mês', `Em ${escapeHtml(monthLabel(monthKey))} não há dívida ativa. Avance para o mês em que as parcelas começam.`)}
+        </div>` : emptyState(
+          '◈',
+          allRows.length && debtFilter !== 'all' ? 'Nada neste filtro' : 'Nada neste mês',
+          allRows.length && debtFilter !== 'all'
+            ? 'Troque o filtro acima ou volte para Tudo.'
+            : `Em ${escapeHtml(monthLabel(monthKey))} não há dívida ativa. Avance para o mês em que as parcelas começam.`
+        )}
     </section>`;
 }
 
