@@ -612,6 +612,33 @@ a { color: inherit; }
   background: var(--danger-soft);
   border-color: #fecaca;
 }
+.income-daily-panel { margin: 0; }
+.daily-calc {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(114, 227, 173, .35);
+  border-radius: 12px;
+  background: rgba(114, 227, 173, .08);
+}
+.daily-calc__rate {
+  font-size: .8rem;
+  color: var(--muted);
+}
+.daily-calc__rate strong { color: var(--ink); font-weight: 700; }
+.daily-calc__warn { color: var(--warning); font-weight: 600; }
+.daily-calc__total {
+  font-size: .95rem;
+  font-weight: 600;
+}
+.daily-calc__total strong {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 1.15rem;
+  font-weight: 750;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
 .dialog .field > span { font-size: .74rem; }
 .dialog .field input, .dialog .field select, .dialog .field textarea {
   min-height: 40px; border-radius: 10px; padding: 8px 11px;

@@ -978,11 +978,17 @@ function openCreate(type, entry = null) {
   refs.dialogTitle.textContent = entry ? entry.name : (TYPE_LABEL[type] || 'Item');
   const today = toISODate(new Date());
   if (type === 'income') {
+    const dailyNet = Number(state.settings.dailyNetValue) || 0;
     const isDaily = Boolean(entry?.isDaily) || String(entry?.category || '').toLowerCase() === 'diária';
     const category = entry?.category || 'Salário';
+    const qty = entry?.quantity ?? '';
+    const qtyLabel = qty === '' || qty == null ? '' : String(qty).replace('.', ',');
+    const initialTotal = isDaily && dailyNet > 0 && Number(qty) > 0
+      ? Math.round(Number(qty) * dailyNet * 100) / 100
+      : 0;
     refs.dialogFields.innerHTML = `
-      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Salário mensal" /></label>
-      <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="${isDaily ? 'Ex.: Diárias de agosto' : 'Ex.: Salário mensal'}" /></label>
+      <label class="field${isDaily ? ' hidden' : ''}" data-income-amount><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: !isDaily })}</label>
       ${categoryField('income', category)}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
       <label class="field"><span>Situação</span><select name="certainty">
@@ -990,18 +996,40 @@ function openCreate(type, entry = null) {
         <option value="guaranteed" ${entry?.certainty === 'guaranteed' ? 'selected' : ''}>Garantida</option>
         <option value="forecast" ${!entry || entry?.certainty === 'forecast' || (!entry?.received && entry?.certainty !== 'guaranteed' && entry?.certainty !== 'received') ? 'selected' : ''}>Prevista</option>
       </select></label>
-      <div class="span-2 income-daily-fields ${isDaily || category === 'Diária' ? '' : 'hidden'}" data-income-daily>
-        <label class="field"><span>Qtd. diárias</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
-        <input type="hidden" name="isDaily" value="${isDaily || category === 'Diária' ? 'on' : ''}" data-income-daily-flag />
+      <div class="span-2 income-daily-panel${isDaily ? '' : ' hidden'}" data-income-daily>
+        <div class="daily-calc">
+          <div class="daily-calc__rate">Diária líquida · <strong>${brl(dailyNet)}</strong>${dailyNet <= 0 ? ' <span class="daily-calc__warn">(cadastre em Ajustes)</span>' : ''}</div>
+          <label class="field"><span>Quantidade no mês</span><input name="quantity" type="text" inputmode="decimal" value="${escapeHtml(qtyLabel)}" placeholder="Ex.: 4,5" ${isDaily ? 'required' : ''} /></label>
+          <div class="daily-calc__total">Total a receber <strong data-daily-total>${brl(initialTotal)}</strong></div>
+        </div>
+        <input type="hidden" name="isDaily" value="${isDaily ? 'on' : ''}" data-income-daily-flag />
       </div>`;
     const categorySelect = refs.dialogFields.querySelector('[name="category"]');
+    const amountField = refs.dialogFields.querySelector('[data-income-amount]');
+    const amountInput = amountField?.querySelector('[name="amount"]');
     const dailyBlock = refs.dialogFields.querySelector('[data-income-daily]');
     const dailyFlag = refs.dialogFields.querySelector('[data-income-daily-flag]');
-    categorySelect?.addEventListener('change', () => {
+    const qtyInput = refs.dialogFields.querySelector('[name="quantity"]');
+    const totalEl = refs.dialogFields.querySelector('[data-daily-total]');
+    const nameInput = refs.dialogFields.querySelector('[name="name"]');
+
+    const parseQty = (raw) => Math.max(0, Number(String(raw || '').trim().replace(',', '.')) || 0);
+    const updateDailyTotal = () => {
+      const total = Math.round(parseQty(qtyInput?.value) * dailyNet * 100) / 100;
+      if (totalEl) totalEl.textContent = brl(total);
+    };
+    const syncIncomeMode = () => {
       const daily = categorySelect.value === 'Diária';
       dailyBlock?.classList.toggle('hidden', !daily);
+      amountField?.classList.toggle('hidden', daily);
+      if (amountInput) amountInput.required = !daily;
+      if (qtyInput) qtyInput.required = daily;
       if (dailyFlag) dailyFlag.value = daily ? 'on' : '';
-    });
+      if (nameInput && !entry) nameInput.placeholder = daily ? 'Ex.: Diárias de agosto' : 'Ex.: Salário mensal';
+      if (daily) updateDailyTotal();
+    };
+    categorySelect?.addEventListener('change', syncIncomeMode);
+    qtyInput?.addEventListener('input', updateDailyTotal);
   } else if (type === 'installment') {
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
@@ -1380,12 +1408,15 @@ async function saveEdit(data) {
 function applyIncomeFields(entry, data) {
   const daily = data.isDaily === 'on' || data.category === 'Diária';
   entry.isDaily = daily;
-  entry.quantity = daily ? Math.max(0, Number(data.quantity) || 1) : 0;
+  const quantity = Math.max(0, Number(String(data.quantity ?? '').trim().replace(',', '.')) || 0);
+  entry.quantity = daily ? quantity : 0;
   entry.certainty = Object.values(INCOME_CERTAINTY).includes(data.certainty) ? data.certainty : INCOME_CERTAINTY.FORECAST;
   entry.received = entry.certainty === INCOME_CERTAINTY.RECEIVED;
   if (daily) {
     const dailyNet = Number(state.settings.dailyNetValue) || 0;
-    if (dailyNet > 0 && entry.quantity > 0) entry.amount = Math.round(entry.quantity * dailyNet * 100) / 100;
+    if (dailyNet <= 0) throw new Error('Cadastre o valor líquido da diária em Ajustes.');
+    if (quantity <= 0) throw new Error('Informe a quantidade de diárias.');
+    entry.amount = Math.round(quantity * dailyNet * 100) / 100;
     entry.category = data.category || 'Diária';
   }
   if (entry.certainty === INCOME_CERTAINTY.RECEIVED) {
