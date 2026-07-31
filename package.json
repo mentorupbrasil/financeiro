@@ -1,0 +1,21 @@
+{
+  "name": "respira-financeiro",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Respira by GestorPro — comando financeiro pessoal com sync Neon.",
+  "type": "module",
+  "scripts": {
+    "migrate": "node --env-file=.env scripts/migrate.mjs",
+    "inspect-db": "node --env-file=.env scripts/inspect-db.mjs",
+    "dev": "npx --yes serve -l 8080"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mentorupbrasil/financeiro.git"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "pg": "^8.22.0"
+  }
+}

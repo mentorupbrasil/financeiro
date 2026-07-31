@@ -2,12 +2,11 @@
 
 ## Primeira entrada
 
-1. Abra o sistema e crie um PIN de 4 a 12 números.
-2. Entre em **Configurações → Restaurar ou importar dados**.
-3. Escolha o arquivo privado `RESPIRA_DADOS_INICIAIS.json`.
-4. Vá para **Contas** e preencha todos os valores que ainda estão zerados.
-5. Em **Entradas**, informe quantas diárias/viagens você realmente consegue fazer.
-6. Confira a **Visão geral** antes de gastar qualquer valor — leia o bloco **Orientação do mês**.
+1. Abra [financeiro.gestorpro.sbs](https://financeiro.gestorpro.sbs).
+2. Entre com o **PIN fixo** `0707` (já vem preenchido).
+3. Se precisar de dados iniciais, use **Configurações → Restaurar ou importar** com `RESPIRA_DADOS_INICIAIS.json`.
+4. Preencha contas zeradas e a quantidade real de diárias.
+5. Leia o bloco **Orientação do mês** antes de gastar.
 
 ## Ordem correta no dia do pagamento
 
@@ -55,4 +54,4 @@ Depois use **Fechar mês e criar o próximo**. Entradas e contas recorrentes ser
 
 ## Segurança
 
-O PIN não pode ser recuperado. Mantenha pelo menos um backup em local seguro. O backup também usa o PIN existente no momento em que foi criado.
+O PIN do sistema é fixo (`0707`) e também valida a API. Mantenha backups. Se esquecer dados locais, sincronize de novo com a nuvem Neon.

@@ -1,7 +1,8 @@
-const CACHE = 'respira-v2';
+const CACHE = 'respira-v3';
 const ASSETS = [
-  './', './index.html', './styles.css', './manifest.webmanifest', './assets/icon.svg',
-  './js/app.js', './js/storage.js', './js/model.js', './js/templates.js'
+  './', './index.html', './styles.css', './manifest.webmanifest',
+  './assets/icon.svg', './assets/logos/gestorpro-icon.png', './assets/logos/gestorpro-symbol.png',
+  './js/app.js', './js/storage.js', './js/model.js', './js/templates.js', './js/config.js', './js/sync.js'
 ];
 
 self.addEventListener('install', (event) => {

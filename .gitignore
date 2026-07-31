@@ -2,7 +2,12 @@
 *DADOS_INICIAIS*.json
 respira-backup-*.json
 respira-dados-*.json
+.env
+.env.local
+.env.*.local
+node_modules/
 
 # Sistema
 .DS_Store
 Thumbs.db
+.vercel

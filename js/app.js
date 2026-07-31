@@ -14,8 +14,9 @@ import {
   projection,
   scenarios,
 } from './model.js';
+import { APP_PIN } from './config.js';
+import { fetchRemoteState, pingApi, pushRemoteState } from './sync.js';
 import {
-  changePin,
   createVault,
   downloadEncryptedBackup,
   hasVault,
@@ -27,6 +28,8 @@ import {
   wipeVault,
 } from './storage.js';
 import { brl, clampPercent, emptyState, escapeHtml, formatDueDay, number, percent, statusPill } from './templates.js';
+
+const SESSION_FLAG = 'respira:session-open';
 
 const views = {
   dashboard: ['COMANDO DO MÊS', 'Visão geral'],
@@ -40,9 +43,6 @@ const views = {
 
 const refs = {
   boot: document.querySelector('#boot-screen'),
-  setup: document.querySelector('#setup-screen'),
-  setupForm: document.querySelector('#setup-form'),
-  setupError: document.querySelector('#setup-error'),
   lock: document.querySelector('#lock-screen'),
   unlockForm: document.querySelector('#unlock-form'),
   unlockPin: document.querySelector('#unlock-pin'),
@@ -66,6 +66,8 @@ const refs = {
   importFile: document.querySelector('#import-file'),
   installApp: document.querySelector('#install-app'),
   toastRegion: document.querySelector('#toast-region'),
+  syncDot: document.querySelector('#sync-dot'),
+  syncLabel: document.querySelector('#sync-label'),
 };
 
 let state = null;
@@ -74,6 +76,7 @@ let dialogContext = null;
 let installPrompt = null;
 let idleTimer = null;
 let saving = false;
+let cloudOnline = false;
 
 init();
 
@@ -81,14 +84,20 @@ async function init() {
   bindGlobalEvents();
   registerServiceWorker();
   refs.boot.classList.add('hidden');
-  if (hasVault()) showLock();
-  else showSetup();
+  if (refs.unlockPin) refs.unlockPin.value = APP_PIN;
+  if (sessionStorage.getItem(SESSION_FLAG) === '1') {
+    try {
+      await openWithPin(APP_PIN, { quiet: true });
+      return;
+    } catch {
+      sessionStorage.removeItem(SESSION_FLAG);
+    }
+  }
+  showLock();
 }
 
 function bindGlobalEvents() {
-  refs.setupForm.addEventListener('submit', handleSetup);
   refs.unlockForm.addEventListener('submit', handleUnlock);
-  document.querySelector('#reset-local-data').addEventListener('click', handleForgotPin);
   document.querySelector('#lock-now').addEventListener('click', () => lockApp(true));
   document.querySelector('#quick-add').addEventListener('click', openQuickAdd);
   refs.monthInput.addEventListener('change', handleMonthChange);
@@ -134,69 +143,98 @@ async function registerServiceWorker() {
   }
 }
 
-function showSetup() {
-  refs.setup.classList.remove('hidden');
-  refs.lock.classList.add('hidden');
-  refs.app.classList.add('hidden');
-}
-
 function showLock() {
   refs.lock.classList.remove('hidden');
-  refs.setup.classList.add('hidden');
   refs.app.classList.add('hidden');
-  refs.unlockForm.reset();
+  if (refs.unlockPin) refs.unlockPin.value = APP_PIN;
   hideError(refs.unlockError);
-  setTimeout(() => refs.unlockPin.focus(), 50);
-}
-
-async function handleSetup(event) {
-  event.preventDefault();
-  const pin = document.querySelector('#setup-pin').value.trim();
-  const confirmation = document.querySelector('#setup-pin-confirm').value.trim();
-  if (!/^\d{4,12}$/.test(pin)) return showError(refs.setupError, 'Use um PIN de 4 a 12 números.');
-  if (pin !== confirmation) return showError(refs.setupError, 'Os dois PINs não são iguais.');
-  try {
-    hideError(refs.setupError);
-    state = createEmptyState();
-    await createVault(pin, state);
-    launchApp();
-    toast('Cofre criado', 'Seus dados já estão protegidos neste dispositivo.', 'success');
-  } catch (error) {
-    showError(refs.setupError, `Não foi possível criar o cofre: ${error.message}`);
-  }
+  setTimeout(() => refs.unlockPin?.focus(), 50);
 }
 
 async function handleUnlock(event) {
   event.preventDefault();
-  const pin = refs.unlockPin.value.trim();
+  const pin = refs.unlockPin.value.trim() || APP_PIN;
   try {
     hideError(refs.unlockError);
-    state = normalizeState(await unlockVault(pin));
-    launchApp();
-  } catch {
-    showError(refs.unlockError, 'PIN incorreto ou dados locais corrompidos.');
+    await openWithPin(pin);
+  } catch (error) {
+    showError(refs.unlockError, error.message || 'Não foi possível entrar.');
   }
 }
 
-async function handleForgotPin() {
-  const confirmed = await confirmDialog(
-    'Apagar os dados deste navegador?',
-    'Isso remove o cofre local. Só faça isso se você tiver um arquivo de backup ou quiser recomeçar.',
-    'Apagar dados',
-  );
-  if (!confirmed) return;
-  wipeVault();
-  location.reload();
+async function openWithPin(pin, { quiet = false } = {}) {
+  if (pin !== APP_PIN) throw new Error('PIN incorreto. Use o PIN fixo do sistema.');
+
+  let localState = null;
+  if (hasVault()) {
+    try {
+      localState = normalizeState(await unlockVault(pin));
+    } catch {
+      wipeVault();
+      localState = null;
+    }
+  }
+
+  let remote = null;
+  try {
+    remote = await fetchRemoteState(pin);
+    cloudOnline = true;
+    setSyncStatus('online', 'Nuvem Neon conectada');
+  } catch (error) {
+    cloudOnline = false;
+    setSyncStatus('offline', error.message?.includes('PIN') ? 'PIN rejeitado na API' : 'Modo local (API offline)');
+  }
+
+  if (remote?.state) {
+    const remoteState = normalizeState(remote.state);
+    const remoteTime = Date.parse(remoteState.updatedAt || remote.updatedAt || 0) || 0;
+    const localTime = Date.parse(localState?.updatedAt || 0) || 0;
+    if (!localState || remoteTime >= localTime) {
+      state = remoteState;
+      if (hasVault()) await saveVault(state);
+      else await createVault(pin, state);
+    } else {
+      state = localState;
+      if (cloudOnline) {
+        try { await pushRemoteState(state, pin); } catch { /* keep local */ }
+      }
+    }
+  } else if (localState) {
+    state = localState;
+    if (cloudOnline) {
+      try { await pushRemoteState(state, pin); } catch { /* ignore */ }
+    }
+  } else {
+    state = createEmptyState();
+    await createVault(pin, state);
+    if (cloudOnline) {
+      try { await pushRemoteState(state, pin); } catch { /* ignore */ }
+    }
+    if (!quiet) toast('Bem-vindo', 'Cofre criado com o PIN fixo. Seus dados sincronizam na nuvem quando a API estiver no ar.', 'success');
+  }
+
+  sessionStorage.setItem(SESSION_FLAG, '1');
+  launchApp();
+}
+
+function setSyncStatus(mode, label) {
+  if (!refs.syncDot || !refs.syncLabel) return;
+  refs.syncDot.classList.toggle('is-offline', mode === 'offline');
+  refs.syncDot.classList.toggle('is-error', mode === 'error');
+  refs.syncLabel.textContent = label;
 }
 
 function launchApp() {
-  refs.setup.classList.add('hidden');
   refs.lock.classList.add('hidden');
   refs.app.classList.remove('hidden');
   refs.monthInput.value = state.currentMonth;
   currentView = 'dashboard';
   render();
   resetIdleTimer();
+  pingApi().then((ok) => {
+    if (ok) setSyncStatus('online', 'Nuvem Neon conectada');
+    else setSyncStatus('offline', 'Modo local (API offline)');
+  });
 }
 
 function lockApp(manual = false) {
@@ -204,8 +242,9 @@ function lockApp(manual = false) {
   lockVault();
   clearTimeout(idleTimer);
   state = null;
+  sessionStorage.removeItem(SESSION_FLAG);
   showLock();
-  if (manual) document.querySelector('#lock-copy').textContent = 'Sistema bloqueado. Digite seu PIN para continuar.';
+  if (manual) document.querySelector('#lock-copy').textContent = 'Sistema bloqueado. Entre com o PIN fixo para continuar.';
 }
 
 function resetIdleTimer() {
@@ -556,24 +595,23 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <div class="card-header"><div><h2>Trocar PIN</h2><p>O cofre será criptografado novamente com o novo PIN.</p></div></div>
-        <form class="settings-section" data-form="change-pin">
-          <div class="form-grid">
-            <label class="field"><span>PIN atual</span><input name="oldPin" type="password" inputmode="numeric" minlength="4" maxlength="12" required /></label>
-            <label class="field"><span>Novo PIN</span><input name="newPin" type="password" inputmode="numeric" minlength="4" maxlength="12" required /></label>
-          </div>
-          <div><button class="button button--secondary" type="submit">Atualizar PIN</button></div>
-        </form>
+        <div class="card-header"><div><h2>Acesso e nuvem</h2><p>PIN fixo do sistema · sync Neon em financeiro.gestorpro.sbs</p></div></div>
+        <div class="settings-section">
+          <div class="callout"><div class="callout-icon">✓</div><div><strong>PIN fixo: ${APP_PIN}</strong><p>Não precisa criar PIN a cada aparelho. A sessão fica aberta neste navegador até você bloquear.</p></div></div>
+          <div class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '☁' : '!'}</div><div><strong>${cloudOnline ? 'Banco Neon conectado' : 'API offline neste ambiente'}</strong><p>${cloudOnline ? 'Cada salvamento atualiza o PostgreSQL e o cache local.' : 'No GitHub Pages a API não roda. Publique no Vercel com DATABASE_URL e APP_PIN para sync na nuvem.'}</p></div></div>
+          <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
+          <button class="button button--ghost button--full" type="button" data-action="wipe-local">Apagar cache local deste navegador</button>
+        </div>
       </section>
     </div>
 
     <div class="grid">
       <section class="card">
-        <div class="card-header"><div><h2>Backup e restauração</h2><p>Seu backup continua criptografado pelo PIN.</p></div></div>
+        <div class="card-header"><div><h2>Backup e restauração</h2><p>Arquivo local de segurança, além da nuvem.</p></div></div>
         <div class="settings-section backup-actions">
           <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup criptografado</button>
           <button class="button button--secondary button--full" type="button" data-action="import-data">Restaurar ou importar dados</button>
-          <div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Não dependa só do navegador</strong><p>Faça um backup sempre que fechar o mês ou alterar muitas informações.</p></div></div>
+          <div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Faça backup ao fechar o mês</strong><p>A nuvem é o principal, o arquivo é o plano B.</p></div></div>
         </div>
       </section>
 
@@ -623,6 +661,8 @@ async function handleViewClick(event) {
     'import-data': () => refs.importFile.click(),
     'print': () => window.print(),
     'wipe-data': wipeAllData,
+    'wipe-local': wipeLocalCache,
+    'sync-now': syncNow,
   };
   if (actionMap[action]) await actionMap[action]();
 }
@@ -646,16 +686,6 @@ async function handleViewSubmit(event) {
     };
     await persist('Regras atualizadas', 'O painel foi recalculado com os novos percentuais.');
     resetIdleTimer();
-  }
-  if (form.dataset.form === 'change-pin') {
-    if (!/^\d{4,12}$/.test(data.newPin)) return toast('PIN inválido', 'Use de 4 a 12 números.', 'error');
-    try {
-      await changePin(state, data.oldPin, data.newPin);
-      form.reset();
-      toast('PIN atualizado', 'O cofre foi criptografado novamente.', 'success');
-    } catch (error) {
-      toast('Não foi possível trocar', error.message, 'error');
-    }
   }
 }
 
@@ -833,6 +863,15 @@ async function persist(title = '', message = '', type = 'success') {
     state = normalizeState(state);
     state.updatedAt = new Date().toISOString();
     await saveVault(state);
+    try {
+      await pushRemoteState(state, APP_PIN);
+      cloudOnline = true;
+      setSyncStatus('online', 'Nuvem Neon sincronizada');
+    } catch (error) {
+      cloudOnline = false;
+      setSyncStatus('offline', 'Salvo local · nuvem offline');
+      console.warn('sync', error.message);
+    }
     render();
     if (title) toast(title, message, type);
   } catch (error) {
@@ -840,6 +879,51 @@ async function persist(title = '', message = '', type = 'success') {
   } finally {
     saving = false;
   }
+}
+
+async function syncNow() {
+  try {
+    const remote = await fetchRemoteState(APP_PIN);
+    cloudOnline = true;
+    if (remote?.state) {
+      const remoteState = normalizeState(remote.state);
+      const remoteTime = Date.parse(remoteState.updatedAt || remote.updatedAt || 0) || 0;
+      const localTime = Date.parse(state.updatedAt || 0) || 0;
+      if (remoteTime > localTime) {
+        state = remoteState;
+        await saveVault(state);
+        render();
+        toast('Sincronizado', 'Versão da nuvem era mais recente e foi aplicada.', 'success');
+      } else {
+        await pushRemoteState(state, APP_PIN);
+        toast('Sincronizado', 'Seus dados locais foram enviados para o Neon.', 'success');
+      }
+    } else {
+      await pushRemoteState(state, APP_PIN);
+      toast('Sincronizado', 'Primeiro envio para o Neon concluído.', 'success');
+    }
+    setSyncStatus('online', 'Nuvem Neon sincronizada');
+  } catch (error) {
+    cloudOnline = false;
+    setSyncStatus('error', 'Falha na sincronização');
+    toast('Sync falhou', error.message, 'error');
+  }
+}
+
+async function wipeLocalCache() {
+  const confirmed = await confirmDialog('Apagar só o cache local?', 'Os dados na nuvem Neon permanecem. Neste navegador você entra de novo com o PIN fixo.', 'Apagar cache');
+  if (!confirmed) return;
+  wipeVault();
+  sessionStorage.removeItem(SESSION_FLAG);
+  location.reload();
+}
+
+async function wipeAllData() {
+  const confirmed = await confirmDialog('Apagar tudo deste aparelho?', 'Remove o cache local. Os dados na nuvem só somem se você limpar o Neon à parte.', 'Apagar local');
+  if (!confirmed) return;
+  wipeVault();
+  sessionStorage.removeItem(SESSION_FLAG);
+  location.reload();
 }
 
 function exportBackup() {
@@ -871,13 +955,6 @@ async function handleImportFile() {
   } catch (error) {
     toast('Arquivo não importado', error.message, 'error');
   }
-}
-
-async function wipeAllData() {
-  const confirmed = await confirmDialog('Apagar tudo deste aparelho?', 'Esta ação remove todos os meses, contas, dívidas e backups locais. Não poderá ser desfeita.', 'Apagar tudo');
-  if (!confirmed) return;
-  wipeVault();
-  location.reload();
 }
 
 function confirmDialog(title, copy, actionLabel = 'Confirmar') {
