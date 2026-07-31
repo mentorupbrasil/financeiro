@@ -935,6 +935,25 @@ function categoryField(type, current = '') {
   return `<label class="field"><span>Categoria</span><select name="category">${list.map((item) => `<option value="${escapeHtml(item)}" ${item === value ? 'selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></label>`;
 }
 
+const ACTION_ICONS = {
+  pause: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  play: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
+  pay: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M7 8h7a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8"/></svg>',
+  undo: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>',
+  advance: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h12"/><path d="m13 6 6 6-6 6"/></svg>',
+  settle: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  renegotiate: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1v6h6"/><path d="M3 11a9 9 0 0 1 15.5-6L23 7"/><path d="M7 23v-6H1"/><path d="M21 13a9 9 0 0 1-15.5 6L1 17"/></svg>',
+};
+
+function actionMenuButton(action, id, label, { danger = false, icon = 'edit' } = {}) {
+  return `<button class="action-row${danger ? ' action-row--danger' : ''}" type="button" data-action="${action}" data-id="${id}" data-from-menu="1">
+    <span class="action-row__icon" aria-hidden="true">${ACTION_ICONS[icon] || ACTION_ICONS.edit}</span>
+    <span class="action-row__label">${escapeHtml(label)}</span>
+  </button>`;
+}
+
 function openAddMenu() {
   refs.dialogEyebrow.textContent = 'ADICIONAR';
   refs.dialogTitle.textContent = 'O que deseja incluir?';
@@ -1607,15 +1626,15 @@ function openEntryMore(entry) {
   refs.dialogEyebrow.textContent = 'AÇÕES';
   refs.dialogTitle.textContent = entry.name;
   refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  refs.dialogFields.className = 'dialog-fields dialog-fields--actions';
   const actions = [];
   if (entry.status !== PAY_STATUS.PAID && entry.status !== PAY_STATUS.CANCELLED && !isIn) {
-    actions.push(['pay-partial', 'Pagamento parcial']);
+    actions.push(actionMenuButton('pay-partial', entry.id, 'Pagamento parcial', { icon: 'pay' }));
   }
-  if (entry.paidAmount > 0) actions.push(['undo-pay', 'Desfazer pagamento']);
-  actions.push(['edit-entry', 'Editar']);
-  actions.push(['delete-entry', 'Excluir']);
-  refs.dialogFields.innerHTML = actions.map(([action, label]) => `<button class="choice-card" type="button" data-action="${action}" data-id="${entry.id}" data-from-menu="1"><strong>${label}</strong></button>`).join('');
+  if (entry.paidAmount > 0) actions.push(actionMenuButton('undo-pay', entry.id, 'Desfazer pagamento', { icon: 'undo' }));
+  actions.push(actionMenuButton('edit-entry', entry.id, 'Editar', { icon: 'edit' }));
+  actions.push(actionMenuButton('delete-entry', entry.id, 'Excluir', { danger: true, icon: 'trash' }));
+  refs.dialogFields.innerHTML = actions.join('');
   showEntityDialog();
 }
 
@@ -1654,21 +1673,21 @@ function openCommitmentMore(commitment) {
   refs.dialogEyebrow.textContent = 'AÇÕES';
   refs.dialogTitle.textContent = commitment.name;
   refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  refs.dialogFields.className = 'dialog-fields dialog-fields--actions';
   const actions = [];
   if (isInstallment(item) && !item.meta?.finished) {
-    actions.push(['partial-installment', 'Pagamento parcial']);
-    actions.push(['advance-installment', 'Antecipar parcelas']);
-    actions.push(['settle-installment', 'Quitar saldo']);
+    actions.push(actionMenuButton('partial-installment', commitment.id, 'Pagamento parcial', { icon: 'pay' }));
+    actions.push(actionMenuButton('advance-installment', commitment.id, 'Antecipar parcelas', { icon: 'advance' }));
+    actions.push(actionMenuButton('settle-installment', commitment.id, 'Quitar saldo', { icon: 'settle' }));
   }
   if (isInstallment(item)) {
-    actions.push(['undo-installment', 'Desfazer último pagamento']);
-    actions.push(['renegotiate', 'Renegociar']);
+    actions.push(actionMenuButton('undo-installment', commitment.id, 'Desfazer último pagamento', { icon: 'undo' }));
+    actions.push(actionMenuButton('renegotiate', commitment.id, 'Renegociar', { icon: 'renegotiate' }));
   }
-  actions.push(['pause-commitment', item.paused ? 'Reativar' : 'Pausar']);
-  actions.push(['edit-commitment', 'Editar']);
-  actions.push(['delete-commitment', 'Excluir']);
-  refs.dialogFields.innerHTML = actions.map(([action, label]) => `<button class="choice-card" type="button" data-action="${action}" data-id="${commitment.id}" data-from-menu="1"><strong>${label}</strong></button>`).join('');
+  actions.push(actionMenuButton('pause-commitment', commitment.id, item.paused ? 'Reativar' : 'Pausar', { icon: item.paused ? 'play' : 'pause' }));
+  actions.push(actionMenuButton('edit-commitment', commitment.id, 'Editar', { icon: 'edit' }));
+  actions.push(actionMenuButton('delete-commitment', commitment.id, 'Excluir', { danger: true, icon: 'trash' }));
+  refs.dialogFields.innerHTML = actions.join('');
   showEntityDialog();
 }
 
@@ -1677,11 +1696,16 @@ function openDeleteScope(entry) {
   refs.dialogEyebrow.textContent = 'EXCLUIR';
   refs.dialogTitle.textContent = entry.name;
   refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  refs.dialogFields.className = 'dialog-fields dialog-fields--actions';
   const options = entry.commitmentId
     ? [['one', 'Só este mês'], ['forward', 'Este e os próximos'], ['all', 'Compromisso completo']]
     : [['one', 'Excluir este lançamento']];
-  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  refs.dialogFields.innerHTML = options.map(([scope, label]) =>
+    `<button class="action-row${scope === 'all' ? ' action-row--danger' : ''}" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}">
+      <span class="action-row__icon" aria-hidden="true">${ACTION_ICONS.trash}</span>
+      <span class="action-row__label">${escapeHtml(label)}</span>
+    </button>`
+  ).join('');
   showEntityDialog();
 }
 
@@ -1689,12 +1713,17 @@ function openDeleteCommitment(commitment) {
   refs.dialogEyebrow.textContent = 'EXCLUIR';
   refs.dialogTitle.textContent = commitment.name;
   refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  refs.dialogFields.className = 'dialog-fields dialog-fields--actions';
   refs.dialogFields.innerHTML = [
     ['one', 'Só este mês'],
     ['forward', 'Este e os próximos'],
     ['all', 'Compromisso completo'],
-  ].map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  ].map(([scope, label]) =>
+    `<button class="action-row${scope === 'all' ? ' action-row--danger' : ''}" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}">
+      <span class="action-row__icon" aria-hidden="true">${ACTION_ICONS.trash}</span>
+      <span class="action-row__label">${escapeHtml(label)}</span>
+    </button>`
+  ).join('');
   showEntityDialog();
 }
 
