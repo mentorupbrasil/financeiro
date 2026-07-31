@@ -21,7 +21,7 @@
   --shadow-soft: none;
   --radius: 14px;
   --radius-sm: 10px;
-  --sidebar: 248px;
+  --sidebar: 260px;
   color-scheme: light;
   font-family: Outfit, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   letter-spacing: 0.01em;
@@ -131,23 +131,35 @@ a { color: inherit; }
 .sidebar-brand { padding: 6px 10px 18px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
 .sidebar-brand .brand-logo { width: 32px; height: 32px; border-radius: 8px; }
 .sidebar-brand small { display: block; margin-top: 2px; color: var(--muted); font-size: .7rem; font-weight: 500; }
-.nav-list { display: grid; gap: 2px; padding: 0 2px; }
+.nav-list { display: grid; gap: 4px; padding: 0 2px; }
 .nav-item {
-  width: 100%; display: flex; align-items: center; gap: 11px;
-  border: 0; border-radius: 10px; background: transparent; color: var(--muted);
-  padding: 10px 11px; text-align: left; font-size: .9rem; font-weight: 500;
+  width: 100%; display: flex; align-items: center; gap: 12px;
+  border: 0; border-radius: 12px; background: transparent; color: var(--muted);
+  padding: 11px 12px; text-align: left; font-size: .92rem; font-weight: 500;
   transition: background .15s, color .15s;
 }
-.nav-item > span:first-child {
-  width: 22px; color: #a3a3a3; font-size: .95rem; text-align: center; opacity: .9;
+.nav-icon {
+  width: 36px; height: 36px; flex: 0 0 auto;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: #737373;
+  transition: background .15s, color .15s;
 }
+.nav-icon svg { width: 20px; height: 20px; display: block; }
+.nav-label { min-width: 0; line-height: 1.2; }
 .nav-item:hover { color: var(--ink); background: var(--surface-2); }
+.nav-item:hover .nav-icon { background: #ebebeb; color: var(--ink); }
 .nav-item.active {
   color: var(--primary-foreground);
   background: var(--primary-soft);
   font-weight: 600;
 }
-.nav-item.active > span:first-child { color: #059669; }
+.nav-item.active .nav-icon {
+  background: #fff;
+  color: #059669;
+  box-shadow: 0 0 0 1px rgba(114,227,173,.45);
+}
 .sidebar-footer {
   margin-top: auto; display: grid; gap: 10px;
   padding-top: 14px; border-top: 1px solid var(--border);
@@ -462,19 +474,32 @@ a { color: inherit; }
 @media (max-width: 840px) {
   :root { --sidebar: 0px; }
   .sidebar {
-    inset: auto 0 0 0; width: auto; height: 68px;
-    padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    inset: auto 0 0 0; width: auto; height: 76px;
+    padding: 8px max(6px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
     border: 0; border-top: 1px solid var(--border); background: #fff;
   }
   .sidebar-brand, .sidebar-footer { display: none; }
-  .nav-list { height: 100%; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; overflow-x: auto; }
+  .nav-list { height: 100%; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; overflow-x: auto; }
   .nav-item {
-    min-width: 0; height: 52px; flex-direction: column; justify-content: center; gap: 2px;
-    padding: 4px 1px; border-radius: 10px; font-size: .55rem; text-align: center;
+    min-width: 0; height: 100%; flex-direction: column; justify-content: center; gap: 4px;
+    padding: 6px 2px; border-radius: 12px; font-size: .62rem; text-align: center; font-weight: 600;
   }
-  .nav-item > span:first-child { width: auto; font-size: .95rem; }
-  .nav-item.active { box-shadow: inset 0 -2px var(--primary); }
-  .main-content { margin-left: 0; padding: 0 14px 90px; }
+  .nav-icon {
+    width: 30px; height: 30px; border-radius: 9px; background: transparent;
+  }
+  .nav-icon svg { width: 22px; height: 22px; }
+  .nav-item:hover .nav-icon { background: transparent; }
+  .nav-item.active {
+    background: transparent;
+    box-shadow: inset 0 -2px var(--primary);
+  }
+  .nav-item.active .nav-icon {
+    background: var(--primary-soft);
+    color: #059669;
+    box-shadow: none;
+  }
+  .nav-label { font-size: .62rem; letter-spacing: .01em; }
+  .main-content { margin-left: 0; padding: 0 14px 98px; }
   .topbar { min-height: 68px; }
   .topbar-actions .button--secondary { display: none !important; }
   .topbar-actions .button--primary { width: 38px; overflow: hidden; padding: 8px; font-size: 0; }
