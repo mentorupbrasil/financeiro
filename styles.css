@@ -167,12 +167,27 @@ a { color: inherit; }
 }
 .topbar h1 { margin: 0; font-size: 1.28rem; font-weight: 700; letter-spacing: -.025em; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
-.month-picker {
-  min-height: 38px; display: flex; align-items: center; gap: 8px;
-  border: 1px solid var(--border); border-radius: 11px; background: #fff; padding: 4px 10px;
+.month-nav {
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid var(--border); border-radius: 12px; background: #fff; padding: 3px;
 }
-.month-picker span { color: var(--muted); font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
-.month-picker input { border: 0; outline: 0; background: transparent; color: var(--ink); font-weight: 600; }
+.month-nav__btn {
+  width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--ink); font-size: 1.25rem; line-height: 1; font-weight: 600;
+}
+.month-nav__btn:hover { background: var(--surface-2); }
+.month-nav__label {
+  min-width: 118px; height: 34px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--ink); font-size: .88rem; font-weight: 700; letter-spacing: -.01em;
+  text-transform: capitalize; padding: 0 8px;
+}
+.month-nav__label:hover { background: var(--primary-soft); }
+.month-nav__today {
+  height: 34px; margin-left: 2px; border: 0; border-radius: 9px;
+  background: #dbeafe; color: #1d4ed8; font-size: .72rem; font-weight: 700; padding: 0 10px;
+}
+.month-nav__today:hover { filter: brightness(0.97); }
+.month-nav__today.hidden { display: none; }
 .view-root { width: min(1180px, 100%); margin: 0 auto; padding-top: 22px; }
 
 .grid { display: grid; gap: 14px; }
@@ -457,7 +472,8 @@ a { color: inherit; }
   .topbar-actions .button--secondary { display: none !important; }
   .topbar-actions .button--primary { width: 38px; overflow: hidden; padding: 8px; font-size: 0; }
   .topbar-actions .button--primary span { font-size: 1.05rem; }
-  .month-picker span { display: none; }
+  .month-nav__label { min-width: 96px; font-size: .8rem; padding: 0 4px; }
+  .month-nav__today { padding: 0 8px; }
   .grid--settings, .grid--2, .grid--3 { grid-template-columns: 1fr; }
   .hero-footer { align-items: stretch; flex-direction: column; }
   .stat-strip { grid-template-columns: 1fr 1fr; }
@@ -470,7 +486,6 @@ a { color: inherit; }
   .lock-card { padding: 26px 18px; }
   .topbar h1 { font-size: 1.08rem; }
   .topbar .eyebrow { font-size: .6rem; }
-  .month-picker { max-width: 140px; }
   .grid--4 { grid-template-columns: 1fr 1fr; gap: 10px; }
   .metric-card { padding: 13px; }
   .metric-value { font-size: 1.15rem; }

@@ -3,6 +3,7 @@ import {
   ENTRY_TYPES,
   PAY_STATUS,
   TYPE_LABEL,
+  addMonths,
   advanceInstallmentCommitment,
   createEmptyState,
   currentMonthKey,
@@ -57,7 +58,10 @@ const refs = {
   viewRoot: document.querySelector('#view-root'),
   viewTitle: document.querySelector('#view-title'),
   viewEyebrow: document.querySelector('#view-eyebrow'),
-  monthInput: document.querySelector('#month-input'),
+  monthLabelBtn: document.querySelector('#month-label'),
+  monthPrev: document.querySelector('#month-prev'),
+  monthNext: document.querySelector('#month-next'),
+  monthToday: document.querySelector('#month-today'),
   entityDialog: document.querySelector('#entity-dialog'),
   entityForm: document.querySelector('#entity-form'),
   dialogEyebrow: document.querySelector('#dialog-eyebrow'),
@@ -109,7 +113,10 @@ function bindEvents() {
   refs.unlockForm.addEventListener('submit', handleUnlock);
   document.querySelector('#lock-now').addEventListener('click', () => lockApp(true));
   document.querySelector('#quick-add').addEventListener('click', openAddMenu);
-  refs.monthInput.addEventListener('change', handleMonthChange);
+  refs.monthPrev.addEventListener('click', () => shiftMonth(-1));
+  refs.monthNext.addEventListener('click', () => shiftMonth(1));
+  refs.monthToday.addEventListener('click', () => goToMonth(currentMonthKey()));
+  refs.monthLabelBtn.addEventListener('click', () => goToMonth(currentMonthKey()));
   refs.entityForm.addEventListener('submit', handleEntitySubmit);
   refs.entityDialog.addEventListener('click', (event) => {
     if (event.target.closest('[data-close-dialog]')) refs.entityDialog.close();
@@ -209,7 +216,8 @@ function setSyncStatus(mode, label) {
 function launchApp() {
   refs.lock.classList.add('hidden');
   refs.app.classList.remove('hidden');
-  refs.monthInput.value = state.currentMonth;
+  refs.monthLabelBtn.textContent = monthLabel(state.currentMonth, true);
+  updateMonthNav();
   currentView = 'overview';
   ensureMonth(state, state.currentMonth);
   render();
@@ -245,7 +253,7 @@ function render() {
   const [eyebrow, title] = views[currentView];
   refs.viewEyebrow.textContent = eyebrow;
   refs.viewTitle.textContent = title;
-  refs.monthInput.value = state.currentMonth;
+  updateMonthNav();
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === currentView));
   const map = {
     overview: renderOverview,
@@ -858,11 +866,30 @@ async function handleViewSubmit(event) {
   }
 }
 
-async function handleMonthChange() {
-  const target = refs.monthInput.value || currentMonthKey();
+function updateMonthNav() {
+  if (!state || !refs.monthLabelBtn) return;
+  refs.monthLabelBtn.textContent = monthLabel(state.currentMonth, true).replace('.', '');
+  const isCurrent = state.currentMonth === currentMonthKey();
+  refs.monthToday.classList.toggle('hidden', isCurrent);
+  refs.monthLabelBtn.title = isCurrent ? 'Mês atual' : 'Voltar para este mês';
+}
+
+async function shiftMonth(delta) {
+  await goToMonth(addMonths(state.currentMonth, delta));
+}
+
+async function goToMonth(target) {
+  if (!target || target === state.currentMonth) {
+    updateMonthNav();
+    return;
+  }
   ensureMonth(state, target);
   state.currentMonth = target;
   await persist('', '');
+}
+
+async function handleMonthChange() {
+  // mantido por compatibilidade — navegação usa goToMonth
 }
 
 async function persist(title = '', message = '') {

@@ -1,4 +1,4 @@
-const CACHE = 'respira-v5';
+const CACHE = 'respira-v6';
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './assets/logos/gestorpro-icon.png', './assets/logos/gestorpro-symbol.png',

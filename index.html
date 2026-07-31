@@ -67,10 +67,12 @@
           <h1 id="view-title">Visão geral</h1>
         </div>
         <div class="topbar-actions">
-          <label class="month-picker" aria-label="Mês">
-            <span>Mês</span>
-            <input id="month-input" type="month" />
-          </label>
+          <div class="month-nav" role="group" aria-label="Escolher mês">
+            <button id="month-prev" class="month-nav__btn" type="button" aria-label="Mês anterior">‹</button>
+            <button id="month-label" class="month-nav__label" type="button" title="Ir para o mês atual">jul. de 2026</button>
+            <button id="month-next" class="month-nav__btn" type="button" aria-label="Próximo mês">›</button>
+            <button id="month-today" class="month-nav__today hidden" type="button">Este mês</button>
+          </div>
           <button id="install-app" class="button button--secondary hidden" type="button">Instalar</button>
           <button id="quick-add" class="button button--primary" type="button">Adicionar</button>
         </div>
