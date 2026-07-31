@@ -50,7 +50,7 @@ import {
   unlockVault,
   wipeVault,
 } from './storage.js';
-import { brl, emptyState, escapeHtml, metric, statusPill } from './templates.js';
+import { applyMoneyMask, brl, emptyState, escapeHtml, metric, moneyInput, parseMoney, statusPill } from './templates.js';
 
 const SESSION_FLAG = 'respira:session-open';
 const LOCAL_PIN_KEY = 'respira:local-key-hint';
@@ -347,6 +347,27 @@ function render() {
   };
   refs.viewRoot.innerHTML = map[currentView]();
   if (pendingConflict) refs.viewRoot.insertAdjacentHTML('afterbegin', renderConflictBanner());
+  bindMoneyInputs(refs.viewRoot);
+}
+
+function bindMoneyInputs(root = document) {
+  root.querySelectorAll('.money-input').forEach((input) => {
+    if (input.dataset.moneyBound === '1') return;
+    input.dataset.moneyBound = '1';
+    input.addEventListener('input', () => applyMoneyMask(input));
+    input.addEventListener('focus', () => {
+      requestAnimationFrame(() => input.select());
+    });
+    if (input.value && !input.value.includes('R$')) applyMoneyMask(input);
+  });
+}
+
+function readForm(form) {
+  const data = Object.fromEntries(new FormData(form));
+  form.querySelectorAll('.money-input[name]').forEach((input) => {
+    data[input.name] = parseMoney(input.value);
+  });
+  return data;
 }
 
 function renderConflictBanner() {
@@ -631,10 +652,10 @@ function renderSettings() {
       <div class="card-header"><div><h2>Regras</h2><p>Diárias, metas e margem</p></div></div>
       <form class="settings-section" data-form="settings">
         <div class="form-grid">
-          <label class="field"><span>Valor líquido de uma diária (R$)</span><input name="dailyNetValue" type="number" min="0" step="0.01" value="${s.dailyNetValue || 0}" required /></label>
-          <label class="field"><span>Meta mensal para guardar (R$)</span><input name="saveGoal" type="number" min="0" step="0.01" value="${s.saveGoal || 0}" required /></label>
-          <label class="field"><span>Fundo mensal dívidas congeladas (R$)</span><input name="frozenDebtFund" type="number" min="0" step="0.01" value="${s.frozenDebtFund || 0}" required /></label>
-          <label class="field"><span>Margem mínima de segurança (R$)</span><input name="safetyMargin" type="number" min="0" step="0.01" value="${s.safetyMargin}" required /></label>
+          <label class="field"><span>Valor líquido de uma diária</span>${moneyInput('dailyNetValue', s.dailyNetValue || 0, { required: true })}</label>
+          <label class="field"><span>Meta mensal para guardar</span>${moneyInput('saveGoal', s.saveGoal || 0, { required: true })}</label>
+          <label class="field"><span>Fundo mensal dívidas congeladas</span>${moneyInput('frozenDebtFund', s.frozenDebtFund || 0, { required: true })}</label>
+          <label class="field"><span>Margem mínima de segurança</span>${moneyInput('safetyMargin', s.safetyMargin, { required: true })}</label>
           <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /><small class="muted" style="margin-top:-2px">0 = nunca bloquear sozinho</small></label>
           <label class="field"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" placeholder="Aparece na visão geral" /></label>
         </div>
@@ -722,7 +743,7 @@ function openCreate(type, entry = null) {
   if (type === 'income') {
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Diárias da semana" /></label>
-      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
       ${categoryField('income', entry?.category || 'Diária')}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
       <label class="field"><span>Situação</span><select name="certainty">
@@ -735,7 +756,7 @@ function openCreate(type, entry = null) {
   } else if (type === 'installment') {
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
-      <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      <label class="field"><span>Valor da parcela</span>${moneyInput('installmentValue', entry?.amount ?? '', { required: true })}</label>
       ${categoryField('installment', entry?.category || 'Parcelado')}
       <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" required value="${entry?.installmentNumber ?? 1}" /></label>
       <label class="field"><span>Total</span><input name="totalInstallments" type="number" min="1" required value="${entry?.totalInstallments ?? ''}" /></label>
@@ -745,7 +766,7 @@ function openCreate(type, entry = null) {
     const dueDay = entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : (entry?.dueDay || 1);
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Aluguel" /></label>
-      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
       ${categoryField('bill', entry?.category || 'Moradia')}
       <label class="field"><span>Dia do mês</span><input name="dueDay" type="number" min="1" max="31" value="${dueDay}" required /></label>
       <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
@@ -758,12 +779,13 @@ function openCreate(type, entry = null) {
     const catType = type === 'reserve' ? 'reserve' : 'expense';
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
-      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
       ${categoryField(catType, entry?.category || (type === 'reserve' ? 'Reserva' : 'Outros'))}
       <label class="field span-2"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>`;
   }
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
+  bindMoneyInputs(refs.entityDialog);
 }
 
 function openDebtForm(debt = null) {
@@ -774,15 +796,16 @@ function openDebtForm(debt = null) {
   refs.dialogTitle.textContent = debt ? debt.creditor : 'Dívida';
   refs.dialogFields.innerHTML = `
     <label class="field span-2"><span>Credor</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" /></label>
-    <label class="field"><span>Saldo</span><input name="balance" type="number" min="0" step="0.01" required value="${debt?.balance ?? ''}" /></label>
-    <label class="field"><span>Mensal</span><input name="plannedMonthly" type="number" min="0" step="0.01" required value="${debt?.plannedMonthly ?? ''}" /></label>
-    <label class="field"><span>Juros/custo</span><input name="monthlyCost" type="number" min="0" step="0.01" value="${debt?.monthlyCost ?? 0}" /></label>
+    <label class="field"><span>Saldo</span>${moneyInput('balance', debt?.balance ?? '', { required: true })}</label>
+    <label class="field"><span>Mensal</span>${moneyInput('plannedMonthly', debt?.plannedMonthly ?? '', { required: true })}</label>
+    <label class="field"><span>Juros/custo</span>${moneyInput('monthlyCost', debt?.monthlyCost ?? 0)}</label>
     <label class="field"><span>Prioridade</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
     <label class="field span-2"><span>Status</span><select name="status">
       ${Object.entries(DEBT_STATUS_LABEL).map(([id, label]) => `<option value="${id}" ${debt?.status === id ? 'selected' : ''}>${label}</option>`).join('')}
     </select></label>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
+  bindMoneyInputs(refs.entityDialog);
 }
 
 async function handleDialogClick(event) {
@@ -818,7 +841,7 @@ async function handleDialogClick(event) {
 async function handleEntitySubmit(event) {
   event.preventDefault();
   if (!dialogContext) return;
-  const data = Object.fromEntries(new FormData(refs.entityForm));
+  const data = readForm(refs.entityForm);
   try {
     if (dialogContext.mode === 'partial') {
       await mutateImportant(async () => {
@@ -1215,12 +1238,13 @@ async function handleViewClick(event) {
     refs.dialogSubmit.classList.remove('hidden');
     refs.dialogFields.className = 'dialog-fields';
     refs.dialogFields.innerHTML = `
-      <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" value="${commitment.installmentValue}" required /></label>
+      <label class="field"><span>Valor da parcela</span>${moneyInput('installmentValue', commitment.installmentValue, { required: true })}</label>
       <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" value="${commitment.totalInstallments || 1}" required /></label>
       <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" value="${Math.min(commitment.currentInstallment || 1, commitment.totalInstallments || 1)}" required /></label>
       <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" value="${commitment.nextDueDate || ''}" required /></label>`;
     hideError(refs.dialogError);
     refs.entityDialog.showModal();
+    bindMoneyInputs(refs.entityDialog);
     return;
   }
   if (action === 'edit-commitment') {
@@ -1339,12 +1363,13 @@ function openPartialPay(entry) {
   refs.dialogFields.className = 'dialog-fields';
   const pending = Math.max(0, entry.amount - (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0));
   refs.dialogFields.innerHTML = `
-    <label class="field"><span>Valor pago</span><input name="amount" type="number" min="0.01" step="0.01" required value="${pending}" /></label>
+    <label class="field"><span>Valor pago</span>${moneyInput('amount', pending, { required: true })}</label>
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
     <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
     <p class="muted span-2" style="margin:0">Falta pagar: ${brl(pending)}</p>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
+  bindMoneyInputs(refs.entityDialog);
 }
 
 function openDebtPay(debt) {
@@ -1356,11 +1381,12 @@ function openDebtPay(debt) {
   const suggested = Math.min(Number(debt.plannedMonthly) || Number(debt.balance) || 0, Number(debt.balance) || 0);
   refs.dialogFields.innerHTML = `
     <p class="muted span-2" style="margin:0">Saldo atual: <strong>${brl(debt.balance)}</strong></p>
-    <label class="field"><span>Valor pago</span><input name="amount" type="number" min="0.01" step="0.01" max="${debt.balance}" required value="${suggested || ''}" /></label>
+    <label class="field"><span>Valor pago</span>${moneyInput('amount', suggested || '', { required: true })}</label>
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
     <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
+  bindMoneyInputs(refs.entityDialog);
 }
 
 function openCommitmentMore(commitment) {
@@ -1419,13 +1445,13 @@ async function handleViewSubmit(event) {
   const form = event.target.closest('form[data-form]');
   if (!form) return;
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(form));
+  const data = readForm(form);
   if (form.dataset.form === 'settings') {
     await mutateImportant(async () => {
-      state.settings.dailyNetValue = Number(data.dailyNetValue);
-      state.settings.saveGoal = Number(data.saveGoal);
-      state.settings.frozenDebtFund = Number(data.frozenDebtFund);
-      state.settings.safetyMargin = Number(data.safetyMargin);
+      state.settings.dailyNetValue = Number(data.dailyNetValue) || 0;
+      state.settings.saveGoal = Number(data.saveGoal) || 0;
+      state.settings.frozenDebtFund = Number(data.frozenDebtFund) || 0;
+      state.settings.safetyMargin = Number(data.safetyMargin) || 0;
       state.settings.lockAfterMinutes = Number(data.lockAfterMinutes);
       state.settings.ownerName = String(data.ownerName || '').trim();
     }, 'Salvo', 'Configurações atualizadas.');
