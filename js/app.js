@@ -858,18 +858,17 @@ function categoryField(type, current = '') {
 
 function openAddMenu() {
   refs.dialogEyebrow.textContent = 'ADICIONAR';
-  refs.dialogTitle.textContent = 'Novo lançamento';
+  refs.dialogTitle.textContent = 'O que deseja incluir?';
   refs.dialogSubmit.classList.add('hidden');
   refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
   refs.dialogFields.innerHTML = [
     ['income', 'Receita'],
-    ['bill', 'Conta'],
+    ['bill', 'Conta fixa'],
     ['installment', 'Parcelada'],
+    ['debt', 'Saldo aberto'],
     ['expense', 'Gasto'],
-    ['debt', 'Dívida'],
     ['reserve', 'Reserva'],
   ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
   showEntityDialog();
 }
 
