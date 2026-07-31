@@ -966,7 +966,7 @@ function openAddMenu() {
     ['debt', 'Saldo aberto'],
     ['expense', 'Gasto'],
     ['reserve', 'Reserva'],
-  ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong></button>`).join('');
+  ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}">${escapeHtml(label)}</button>`).join('');
   showEntityDialog();
 }
 
