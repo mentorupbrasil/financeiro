@@ -324,6 +324,7 @@ function normalizeDebt(item = {}) {
     priority: Math.max(1, Math.round(toNumber(item.priority, 3))),
     status,
     note: String(item.note || ''),
+    targetDate: item.targetDate ? String(item.targetDate).slice(0, 10) : '',
     paidTotal: paidTotalAmount,
     remaining: Math.max(0, balance),
   };

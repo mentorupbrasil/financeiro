@@ -732,11 +732,11 @@ function listUnifiedDebts(monthKey = state.currentMonth) {
       monthly: debt.plannedMonthly,
       nextDue: dueDateInMonth(monthKey, 10),
       extra: debt.status === DEBT_STATUS.INTEREST
-        ? `Juros/mês ${brl(debt.plannedMonthly || debt.monthlyCost || 0)}`
+        ? `Juros/mês ${brl(debt.plannedMonthly || debt.monthlyCost || 0)}${debt.targetDate ? ` · quitar ${formatDateBR(debt.targetDate)}` : ''}`
         : debt.status === DEBT_STATUS.ATTACK
-          ? `Planejado ${brl(debt.plannedMonthly)} · prioridade ${debt.priority}`
+          ? `Planejado ${brl(debt.plannedMonthly)} · prioridade ${debt.priority}${debt.targetDate ? ` · quitar ${formatDateBR(debt.targetDate)}` : ''}`
           : debt.status === DEBT_STATUS.FROZEN
-            ? 'Sem pagamento por enquanto'
+            ? `Sem pagamento por enquanto${debt.targetDate ? ` · quitar ${formatDateBR(debt.targetDate)}` : ''}`
             : DEBT_STATUS_LABEL[debt.status] || '',
       raw: debt,
     }));
@@ -963,7 +963,7 @@ function openAddMenu() {
     ['income', 'Receita'],
     ['bill', 'Conta fixa'],
     ['installment', 'Parcelada'],
-    ['debt', 'Saldo aberto'],
+    ['debt', 'Empréstimo / saldo'],
     ['expense', 'Gasto'],
     ['reserve', 'Reserva'],
   ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}">${escapeHtml(label)}</button>`).join('');
@@ -1068,20 +1068,22 @@ function openDebtForm(debt = null) {
   refs.dialogSubmit.classList.remove('hidden');
   refs.dialogFields.className = 'dialog-fields';
   refs.dialogEyebrow.textContent = debt ? 'EDITAR' : 'NOVA';
-  refs.dialogTitle.textContent = debt ? debt.creditor : 'Saldo aberto';
+  refs.dialogTitle.textContent = debt ? debt.creditor : 'Empréstimo / saldo';
   refs.dialogFields.innerHTML = `
-    <label class="field span-2"><span>Credor / nome</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" placeholder="Ex.: Agiota, banco, amigo" /></label>
-    <label class="field"><span>Saldo</span>${moneyInput('balance', debt?.balance ?? '', { required: true })}</label>
-    <label class="field"><span>Valor do mês</span>${moneyInput('plannedMonthly', debt?.plannedMonthly ?? '', { required: true })}</label>
-    <label class="field"><span>Juros/custo</span>${moneyInput('monthlyCost', debt?.monthlyCost ?? 0)}</label>
-    <label class="field"><span>Prioridade</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
+    <label class="field span-2"><span>De quem é / nome</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" placeholder="Ex.: Amigo, banco, agiota" /></label>
+    <label class="field"><span>Quanto ainda deve</span>${moneyInput('balance', debt?.balance ?? '', { required: true })}</label>
+    <label class="field"><span>Quanto pagar este mês</span>${moneyInput('plannedMonthly', debt?.plannedMonthly ?? '', { required: true })}</label>
+    <label class="field"><span>Juros por mês (0 se não tiver)</span>${moneyInput('monthlyCost', debt?.monthlyCost ?? 0)}</label>
+    <label class="field"><span>Prioridade (1 = primeiro)</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
+    <label class="field span-2"><span>Previsão de quitar (opcional)</span><input name="targetDate" type="date" value="${debt?.targetDate || ''}" /></label>
     <label class="field span-2"><span>Como tratar</span><select name="status">
       <option value="attack" ${!debt || debt?.status === 'attack' ? 'selected' : ''}>Atacar — pago quando sobrar</option>
-      <option value="interest" ${debt?.status === 'interest' ? 'selected' : ''}>Só juros — mínimo mensal</option>
+      <option value="interest" ${debt?.status === 'interest' ? 'selected' : ''}>Só juros — pago o mínimo todo mês</option>
       <option value="frozen" ${debt?.status === 'frozen' ? 'selected' : ''}>Congelada — não pago agora</option>
-      <option value="paid" ${debt?.status === 'paid' ? 'selected' : ''}>Quitada</option>
+      <option value="paid" ${debt?.status === 'paid' ? 'selected' : ''}>Já quitei</option>
       <option value="renegotiated" ${debt?.status === 'renegotiated' ? 'selected' : ''}>Renegociada</option>
-    </select></label>`;
+    </select></label>
+    <p class="muted span-2" style="margin:0">Ex.: emprestou R$ 5.000 e cobra R$ 360/mês de juros → “ainda deve” 5000, “juros por mês” 360, “pagar este mês” 360, tratar como Só juros. Se foi só emprestado sem juros → juros 0 e Atacar.</p>`;
   showEntityDialog();
 }
 
@@ -1210,6 +1212,7 @@ async function handleEntitySubmit(event) {
             monthlyCost: Number(data.monthlyCost),
             priority: Number(data.priority),
             status: data.status,
+            targetDate: data.targetDate || '',
             remaining: Number(data.balance),
           });
         } else {
@@ -1221,6 +1224,7 @@ async function handleEntitySubmit(event) {
             monthlyCost: Number(data.monthlyCost),
             priority: Number(data.priority),
             status: data.status || DEBT_STATUS.ATTACK,
+            targetDate: data.targetDate || '',
             note: '',
             paidTotal: 0,
             remaining: Number(data.balance),
