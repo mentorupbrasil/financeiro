@@ -425,6 +425,8 @@ export function commitmentActiveInMonth(commitment, monthKey) {
     const startKey = commitment.nextDueDate.slice(0, 7);
     return monthKey >= startKey && monthKey <= meta.endMonth;
   }
+  // Conta fixa sem data de início: não inventa histórico em meses passados
+  if (!commitment.startDate && monthKey < currentMonthKey()) return false;
   return true;
 }
 

@@ -981,15 +981,15 @@ function openCreate(type, entry = null) {
       <label class="field span-2"><span>Próximo vencimento</span><input name="nextDueDate" type="date" required value="${entry?.dueDate || today}" /></label>
       ${entry ? `<label class="field span-2"><span>Aplicar em</span><select name="editScope"><option value="forward">Este e os próximos</option><option value="one">Só este mês</option></select></label>` : ''}`;
   } else if (type === 'bill') {
-    const dueDay = entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : (entry?.dueDay || 1);
+    const dueDay = entry?.dueDay || (entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : 1);
+    const startMonth = String(entry?.startDate || entry?.dueDate || `${state.currentMonth}-01`).slice(0, 7);
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Aluguel" /></label>
       <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
       ${categoryField('bill', entry?.category || 'Moradia')}
       <label class="field"><span>Dia do mês</span><input name="dueDay" type="number" min="1" max="31" value="${dueDay}" required /></label>
-      <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
-      <label class="check-row span-2"><input name="recurring" type="checkbox" ${entry?.commitmentId || !entry ? 'checked' : ''}/><span>Repetir todo mês</span></label>
-      <input type="hidden" name="startDate" value="${entry?.dueDate || today}" />`;
+      <label class="field"><span>Começa em</span><input name="startMonth" type="month" value="${startMonth}" required /></label>
+      <label class="check-row span-2"><input name="recurring" type="checkbox" ${entry?.commitmentId || !entry ? 'checked' : ''}/><span>Repetir todo mês</span></label>`;
   } else if (type === 'debt') {
     openDebtForm(entry);
     return;
@@ -1190,7 +1190,19 @@ async function handleEntitySubmit(event) {
           commitment.amount = Number(data.amount);
           commitment.category = data.category || commitment.category;
           commitment.dueDay = Number(data.dueDay) || commitment.dueDay || 1;
-          if (data.startDate) commitment.startDate = data.startDate;
+          const startKey = String(data.startMonth || data.startDate || '').slice(0, 7);
+          if (startKey) commitment.startDate = `${startKey}-01`;
+          // Tira lançamentos fantasma de meses antes do início (mantém se já teve pagamento)
+          if (commitment.startDate) {
+            const from = commitment.startDate.slice(0, 7);
+            for (const [key, month] of Object.entries(state.months || {})) {
+              if (key >= from) continue;
+              month.entries = (month.entries || []).filter((row) => {
+                if (row.commitmentId !== commitment.id) return true;
+                return Array.isArray(row.payments) && row.payments.length > 0;
+              });
+            }
+          }
         }
       }, 'Compromisso atualizado', '');
       closeEntityDialog();
@@ -1248,6 +1260,7 @@ async function saveCreate(data) {
     return;
   }
   if (type === 'bill' && data.recurring === 'on') {
+    const startKey = String(data.startMonth || data.startDate || state.currentMonth).slice(0, 7);
     const commitment = {
       id: makeId('commit'),
       type: COMMITMENT_TYPES.RECURRING,
@@ -1255,24 +1268,26 @@ async function saveCreate(data) {
       amount: Number(data.amount),
       category: data.category || 'Conta',
       dueDay: Number(data.dueDay) || 1,
-      startDate: data.startDate || `${state.currentMonth}-01`,
+      startDate: `${startKey}-01`,
       endDate: data.endDate || '',
       note: data.note || '',
       status: 'active',
     };
     state.commitments.push(commitment);
-    month.entries.push({
-      id: makeId('entry'),
-      commitmentId: commitment.id,
-      type: ENTRY_TYPES.BILL,
-      name: commitment.name,
-      amount: commitment.amount,
-      category: commitment.category,
-      dueDate: dueDateInMonth(state.currentMonth, commitment.dueDay),
-      note: commitment.note,
-      payments: [],
-      status: PAY_STATUS.PENDING,
-    });
+    if (state.currentMonth >= startKey) {
+      month.entries.push({
+        id: makeId('entry'),
+        commitmentId: commitment.id,
+        type: ENTRY_TYPES.BILL,
+        name: commitment.name,
+        amount: commitment.amount,
+        category: commitment.category,
+        dueDate: dueDateInMonth(state.currentMonth, commitment.dueDay),
+        note: commitment.note,
+        payments: [],
+        status: PAY_STATUS.PENDING,
+      });
+    }
     return;
   }
   if (type === 'debt') {
@@ -1487,6 +1502,8 @@ async function handleViewClick(event) {
         name: commitment.name,
         amount: commitment.amount,
         category: commitment.category,
+        dueDay: commitment.dueDay || 1,
+        startDate: commitment.startDate || `${state.currentMonth}-01`,
         dueDate: dueDateInMonth(state.currentMonth, commitment.dueDay || 1),
         note: commitment.note,
         commitmentId: commitment.id,
