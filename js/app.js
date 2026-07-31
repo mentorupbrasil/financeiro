@@ -680,19 +680,34 @@ function listRow(item) {
   </div>`;
 }
 
+const CATEGORY_OPTIONS = {
+  income: ['Salário', 'Diária', 'Extra', 'Reembolso', 'Outros'],
+  bill: ['Moradia', 'Energia', 'Água', 'Internet', 'Telefone', 'Transporte', 'Saúde', 'Educação', 'Assinatura', 'Outros'],
+  expense: ['Alimentação', 'Transporte', 'Lazer', 'Compras', 'Saúde', 'Outros'],
+  installment: ['Parcelado', 'Cartão', 'Financiamento', 'Acordo', 'Outros'],
+  reserve: ['Reserva', 'Emergência', 'Meta', 'Congeladas', 'Outros'],
+};
+
+function categoryField(type, current = '') {
+  const options = CATEGORY_OPTIONS[type] || CATEGORY_OPTIONS.bill;
+  const value = current || options[0];
+  const list = options.includes(value) ? options : [value, ...options];
+  return `<label class="field"><span>Categoria</span><select name="category">${list.map((item) => `<option value="${escapeHtml(item)}" ${item === value ? 'selected' : ''}>${escapeHtml(item)}</option>`).join('')}</select></label>`;
+}
+
 function openAddMenu() {
   refs.dialogEyebrow.textContent = 'ADICIONAR';
-  refs.dialogTitle.textContent = 'O que deseja incluir?';
+  refs.dialogTitle.textContent = 'Novo lançamento';
   refs.dialogSubmit.classList.add('hidden');
   refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
   refs.dialogFields.innerHTML = [
-    ['income', 'Receita', 'Salário, diária, extra'],
-    ['bill', 'Conta', 'Fixa ou avulsa'],
-    ['installment', 'Compra parcelada', 'Parcela atual e total'],
-    ['expense', 'Gasto', 'Saída pontual'],
-    ['debt', 'Dívida', 'Credor e saldo'],
-    ['reserve', 'Reserva', 'Dinheiro guardado'],
-  ].map(([id, label, hint]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong><small class="muted" style="display:block;margin-top:4px;font-weight:500">${hint}</small></button>`).join('');
+    ['income', 'Receita'],
+    ['bill', 'Conta'],
+    ['installment', 'Parcelada'],
+    ['expense', 'Gasto'],
+    ['debt', 'Dívida'],
+    ['reserve', 'Reserva'],
+  ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong></button>`).join('');
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
@@ -704,47 +719,48 @@ function openCreate(type, entry = null) {
   refs.dialogEyebrow.textContent = entry ? 'EDITAR' : 'NOVO';
   refs.dialogTitle.textContent = entry ? entry.name : (TYPE_LABEL[type] || 'Item');
   const today = toISODate(new Date());
-  const common = `
-    <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
-    <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
-    <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || '')}" /></label>
-  `;
   if (type === 'income') {
-    refs.dialogFields.innerHTML = `${common}
+    refs.dialogFields.innerHTML = `
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Diárias da semana" /></label>
+      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      ${categoryField('income', entry?.category || 'Diária')}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
-      <label class="field"><span>Quantidade</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
-      <label class="field span-2"><span>Situação</span><select name="certainty">
+      <label class="field"><span>Situação</span><select name="certainty">
         <option value="received" ${entry?.certainty === 'received' || entry?.received ? 'selected' : ''}>Recebida</option>
         <option value="guaranteed" ${entry?.certainty === 'guaranteed' ? 'selected' : ''}>Garantida</option>
-        <option value="forecast" ${!entry || entry?.certainty === 'forecast' || (!entry?.received && entry?.certainty !== 'guaranteed' && entry?.certainty !== 'received') ? 'selected' : ''}>Apenas prevista</option>
+        <option value="forecast" ${!entry || entry?.certainty === 'forecast' || (!entry?.received && entry?.certainty !== 'guaranteed' && entry?.certainty !== 'received') ? 'selected' : ''}>Prevista</option>
       </select></label>
-      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária/viagem (valor = qtd × líquido)</span></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
+      <label class="field"><span>Qtd. diárias</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
+      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária (valor = qtd × líquido)</span></label>`;
   } else if (type === 'installment') {
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
       <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
-      <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || 'Parcelado')}" /></label>
+      ${categoryField('installment', entry?.category || 'Parcelado')}
       <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" required value="${entry?.installmentNumber ?? 1}" /></label>
-      <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" required value="${entry?.totalInstallments ?? ''}" /></label>
-      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" required value="${entry?.dueDate || today}" /></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>
-      ${entry ? `<label class="field span-2"><span>Escopo</span><select name="editScope"><option value="forward">Este e os próximos</option><option value="one">Só este mês</option></select></label>` : ''}`;
+      <label class="field"><span>Total</span><input name="totalInstallments" type="number" min="1" required value="${entry?.totalInstallments ?? ''}" /></label>
+      <label class="field span-2"><span>Próximo vencimento</span><input name="nextDueDate" type="date" required value="${entry?.dueDate || today}" /></label>
+      ${entry ? `<label class="field span-2"><span>Aplicar em</span><select name="editScope"><option value="forward">Este e os próximos</option><option value="one">Só este mês</option></select></label>` : ''}`;
   } else if (type === 'bill') {
-    refs.dialogFields.innerHTML = `${common}
+    const dueDay = entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : (entry?.dueDay || 1);
+    refs.dialogFields.innerHTML = `
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Aluguel" /></label>
+      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      ${categoryField('bill', entry?.category || 'Moradia')}
+      <label class="field"><span>Dia do mês</span><input name="dueDay" type="number" min="1" max="31" value="${dueDay}" required /></label>
       <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
-      <label class="field"><span>Dia fixo</span><input name="dueDay" type="number" min="1" max="31" value="${entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : 1}" /></label>
-      <label class="check-row span-2"><input name="recurring" type="checkbox" ${entry?.commitmentId ? 'checked' : 'checked'}/><span>Repetir todo mês</span></label>
-      <label class="field"><span>Início</span><input name="startDate" type="date" value="${entry?.dueDate || today}" /></label>
-      <label class="field"><span>Fim (opcional)</span><input name="endDate" type="date" value="" /></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
+      <label class="check-row span-2"><input name="recurring" type="checkbox" ${entry?.commitmentId || !entry ? 'checked' : ''}/><span>Repetir todo mês</span></label>
+      <input type="hidden" name="startDate" value="${entry?.dueDate || today}" />`;
   } else if (type === 'debt') {
     openDebtForm(entry);
     return;
   } else {
-    refs.dialogFields.innerHTML = `${common}
-      <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
+    const catType = type === 'reserve' ? 'reserve' : 'expense';
+    refs.dialogFields.innerHTML = `
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
+      <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      ${categoryField(catType, entry?.category || (type === 'reserve' ? 'Reserva' : 'Outros'))}
+      <label class="field span-2"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>`;
   }
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
@@ -758,14 +774,13 @@ function openDebtForm(debt = null) {
   refs.dialogTitle.textContent = debt ? debt.creditor : 'Dívida';
   refs.dialogFields.innerHTML = `
     <label class="field span-2"><span>Credor</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" /></label>
-    <label class="field"><span>Saldo devedor</span><input name="balance" type="number" min="0" step="0.01" required value="${debt?.balance ?? ''}" /></label>
-    <label class="field"><span>Valor planejado mensal</span><input name="plannedMonthly" type="number" min="0" step="0.01" required value="${debt?.plannedMonthly ?? ''}" /></label>
-    <label class="field"><span>Juros ou custo mensal</span><input name="monthlyCost" type="number" min="0" step="0.01" value="${debt?.monthlyCost ?? 0}" /></label>
+    <label class="field"><span>Saldo</span><input name="balance" type="number" min="0" step="0.01" required value="${debt?.balance ?? ''}" /></label>
+    <label class="field"><span>Mensal</span><input name="plannedMonthly" type="number" min="0" step="0.01" required value="${debt?.plannedMonthly ?? ''}" /></label>
+    <label class="field"><span>Juros/custo</span><input name="monthlyCost" type="number" min="0" step="0.01" value="${debt?.monthlyCost ?? 0}" /></label>
     <label class="field"><span>Prioridade</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
     <label class="field span-2"><span>Status</span><select name="status">
       ${Object.entries(DEBT_STATUS_LABEL).map(([id, label]) => `<option value="${id}" ${debt?.status === id ? 'selected' : ''}>${label}</option>`).join('')}
-    </select></label>
-    <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(debt?.note || '')}</textarea></label>`;
+    </select></label>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
@@ -896,7 +911,6 @@ async function handleEntitySubmit(event) {
             monthlyCost: Number(data.monthlyCost),
             priority: Number(data.priority),
             status: data.status,
-            note: data.note || '',
             remaining: Number(data.balance),
           });
         } else {
@@ -908,7 +922,7 @@ async function handleEntitySubmit(event) {
             monthlyCost: Number(data.monthlyCost),
             priority: Number(data.priority),
             status: data.status || DEBT_STATUS.ATTACK,
-            note: data.note || '',
+            note: '',
             paidTotal: 0,
             remaining: Number(data.balance),
           });
@@ -931,16 +945,13 @@ async function handleEntitySubmit(event) {
           commitment.currentInstallment = Number(data.currentInstallment);
           commitment.nextDueDate = data.nextDueDate;
           commitment.category = data.category || commitment.category;
-          commitment.note = data.note || '';
           commitment.needsInfo = !(commitment.totalInstallments && commitment.currentInstallment);
         } else {
           commitment.name = data.name;
           commitment.amount = Number(data.amount);
           commitment.category = data.category || commitment.category;
           commitment.dueDay = Number(data.dueDay) || commitment.dueDay || 1;
-          commitment.startDate = data.startDate || commitment.startDate;
-          commitment.endDate = data.endDate || '';
-          commitment.note = data.note || '';
+          if (data.startDate) commitment.startDate = data.startDate;
         }
       }, 'Compromisso atualizado', '');
       refs.entityDialog.close();
@@ -1061,7 +1072,6 @@ async function saveEdit(data) {
     entry.amount = Number(data.installmentValue);
     entry.category = data.category || entry.category;
     entry.dueDate = data.nextDueDate;
-    entry.note = data.note || '';
     entry.installmentNumber = Number(data.currentInstallment);
     entry.totalInstallments = Number(data.totalInstallments);
     const commitment = state.commitments.find((item) => item.id === entry.commitmentId);
@@ -1073,7 +1083,6 @@ async function saveEdit(data) {
       commitment.currentInstallment = entry.installmentNumber;
       commitment.nextDueDate = entry.dueDate;
       commitment.category = entry.category;
-      commitment.note = entry.note;
       commitment.needsInfo = false;
     }
     return;
@@ -1082,7 +1091,6 @@ async function saveEdit(data) {
   entry.amount = Number(data.amount);
   entry.category = data.category || entry.category;
   entry.dueDate = data.dueDate || entry.dueDate;
-  entry.note = data.note || '';
   if (entry.type === ENTRY_TYPES.INCOME) applyIncomeFields(entry, data);
 }
 
@@ -1210,8 +1218,7 @@ async function handleViewClick(event) {
       <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" value="${commitment.installmentValue}" required /></label>
       <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" value="${commitment.totalInstallments || 1}" required /></label>
       <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" value="${Math.min(commitment.currentInstallment || 1, commitment.totalInstallments || 1)}" required /></label>
-      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" value="${commitment.nextDueDate || ''}" required /></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(commitment.note || '')}</textarea></label>`;
+      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" value="${commitment.nextDueDate || ''}" required /></label>`;
     hideError(refs.dialogError);
     refs.entityDialog.showModal();
     return;
@@ -1334,9 +1341,8 @@ function openPartialPay(entry) {
   refs.dialogFields.innerHTML = `
     <label class="field"><span>Valor pago</span><input name="amount" type="number" min="0.01" step="0.01" required value="${pending}" /></label>
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
-    <label class="field"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
-    <label class="field span-2"><span>Observação</span><textarea name="note"></textarea></label>
-    <p class="muted span-2">Falta pagar: ${brl(pending)}</p>`;
+    <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
+    <p class="muted span-2" style="margin:0">Falta pagar: ${brl(pending)}</p>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
@@ -1352,8 +1358,7 @@ function openDebtPay(debt) {
     <p class="muted span-2" style="margin:0">Saldo atual: <strong>${brl(debt.balance)}</strong></p>
     <label class="field"><span>Valor pago</span><input name="amount" type="number" min="0.01" step="0.01" max="${debt.balance}" required value="${suggested || ''}" /></label>
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
-    <label class="field"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
-    <label class="field span-2"><span>Observação</span><textarea name="note"></textarea></label>`;
+    <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>`;
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
