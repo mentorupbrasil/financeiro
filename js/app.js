@@ -489,7 +489,7 @@ function renderSettings() {
         <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
         <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup</button>
         <button class="button button--secondary button--full" type="button" data-action="import-data">Importar</button>
-        <button class="button button--ghost button--full" type="button" data-action="wipe-local">Apagar cache local</button>
+        <button class="button button--ghost button--full" type="button" data-action="wipe-local">Zerar tudo (local + Neon)</button>
       </div>
     </section>
   </div>`;
@@ -913,10 +913,20 @@ async function handleViewClick(event) {
   }
   if (action === 'import-data') return refs.importFile.click();
   if (action === 'wipe-local') {
-    const ok = await confirmDialog('Apagar cache local?', 'A nuvem permanece.', 'Apagar');
+    const ok = await confirmDialog('Zerar tudo?', 'Apaga local e Neon. Começa do zero.', 'Zerar');
     if (!ok) return;
+    state = createEmptyState();
+    try {
+      const saved = await pushRemoteState(state, APP_PIN);
+      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+    } catch (error) {
+      toast('Neon falhou', error.message, 'error');
+      return;
+    }
     wipeVault();
+    await createVault(APP_PIN, state);
     sessionStorage.removeItem(SESSION_FLAG);
+    toast('Zerado', 'Pode começar a lançar.');
     location.reload();
   }
 }
