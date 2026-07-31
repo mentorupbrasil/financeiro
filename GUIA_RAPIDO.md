@@ -3,55 +3,41 @@
 ## Primeira entrada
 
 1. Abra [financeiro.gestorpro.sbs](https://financeiro.gestorpro.sbs).
-2. Entre com o **PIN fixo** `0707` (já vem preenchido).
-3. Se precisar de dados iniciais, use **Configurações → Restaurar ou importar** com `RESPIRA_DADOS_INICIAIS.json`.
-4. Preencha contas zeradas e a quantidade real de diárias.
-5. Leia o bloco **Orientação do mês** antes de gastar.
+2. Entre com o **PIN** configurado no servidor (`APP_PIN`).
+3. Se precisar de dados iniciais, use **Configurações → Importar** com `RESPIRA_DADOS_INICIAIS.json`.
+4. Em **Configurações**, preencha diária líquida, metas e seu nome.
+5. Leia o bloco **Orientação do mês** na visão geral antes de gastar.
 
 ## Ordem correta no dia do pagamento
 
-1. Marque as entradas recebidas.
+1. Marque as entradas recebidas (Mês atual).
 2. Pague e marque as contas essenciais.
-3. Proteja a folga mínima.
-4. Separe o valor de guardar.
-5. Defina o pagamento da dívida indicada na fila de ataque.
-6. Use somente o valor dos envelopes como dinheiro livre.
+3. Proteja a margem mínima e a meta de guardar.
+4. Em **Dívidas**, registre o pagamento da dívida em **Atacar**.
+5. Use só o valor livre da visão geral como dinheiro disponível.
 
 ## Dívidas: o que atacar e o que não pagar agora
 
-- **ATACAR** — recebe a sobra. Uma por vez.
-- **JUROS** — pague só o mínimo mensal para não explodir.
-- **CONGELADA** — dívida que você ainda não paga. Negocie depois; não use envelope nela.
+- **Atacar** — recebe a sobra. Uma por vez.
+- **Juros** — pague só o mínimo mensal para não explodir.
+- **Congelada** — ainda não paga. Negocie depois.
+- Use **Pagar** na tela de Dívidas para reduzir o saldo.
 
-## Viagens e liberdade
+## Diárias
 
-Na visão geral, compare três metas de diárias:
+Na visão geral, o bloco **Diárias** mostra quantas faltam para:
 
-1. **Fechar** o mês
-2. **Respirar** (folga mínima)
-3. **Liberdade** (reserva + ritmo para zerar a fila ATACAR em ~24 meses)
+1. Pagar as contas
+2. Proteger a margem
+3. Atingir a meta de guardar (e o fundo das congeladas)
 
-Cada diária extra mostra quanto vira livre, guardado e ataque à dívida.
+## Compromissos
 
-## Toda semana
+Contas fixas e parcelas ficam em **Compromissos**. Use **Pagar** para a parcela do mês e **Mais** para parcial, antecipar, quitar, renegociar, pausar ou excluir.
 
-- Abra **Envelopes**.
-- Registre o total gasto acumulado da semana.
-- Não use o limite de uma semana futura.
-- Se o envelope estourar, pare os gastos livres até a próxima semana.
+## Segurança e backup
 
-## Fechamento mensal
-
-Antes de fechar:
-
-- confirme o que entrou;
-- marque todas as contas pagas;
-- informe quanto foi pago em cada dívida;
-- revise os quatro envelopes;
-- baixe um backup criptografado.
-
-Depois use **Fechar mês e criar o próximo**. Entradas e contas recorrentes serão copiadas, e os saldos das dívidas serão reduzidos pelo valor efetivamente pago.
-
-## Segurança
-
-O PIN do sistema é fixo (`0707`) e também valida a API. Mantenha backups. Se esquecer dados locais, sincronize de novo com a nuvem Neon.
+- O PIN valida o acesso local e a API.
+- Os dados ficam criptografados no navegador e sincronizam com o Neon.
+- Depois de mudanças grandes, use **Baixar backup**.
+- **Zerar tudo** apaga local e nuvem — sem volta.

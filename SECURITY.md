@@ -2,9 +2,9 @@
 
 ## Modelo de dados
 
-O Respira é local-first. Não envia dados financeiros para servidor, API, analytics ou repositório. O conteúdo é salvo no `localStorage` do navegador somente depois de ser criptografado.
+O Respira é local-first com sync opcional. O cofre no `localStorage` é criptografado. A cópia na nuvem (Neon via API Vercel) exige sessão autenticada com PIN e cookie HTTP-only.
 
-## Criptografia
+## Criptografia local
 
 - Derivação de chave: PBKDF2 com SHA-256 e 210.000 iterações
 - Criptografia: AES-GCM de 256 bits
@@ -13,15 +13,14 @@ O Respira é local-first. Não envia dados financeiros para servidor, API, analy
 
 ## Limitações importantes
 
-- Esquecer o PIN torna o cofre inacessível.
+- Esquecer o PIN torna o cofre local inacessível (a nuvem ainda pode ser recuperada com o PIN do servidor).
 - Limpar dados do navegador remove o cofre local.
 - Extensões maliciosas, malware ou acesso ao dispositivo desbloqueado podem comprometer informações.
 - O sistema não substitui orientação financeira, contábil ou jurídica profissional.
 
 ## Recomendações
 
-- Use PIN exclusivo.
-- Ative bloqueio automático.
+- Use PIN exclusivo e bloqueio automático.
 - Mantenha o dispositivo protegido por senha.
-- Gere backup após cada fechamento mensal.
-- Não publique arquivos de importação ou backup no GitHub.
+- Gere backup criptografado após mudanças importantes.
+- Não publique arquivos de importação, backup ou `.env` no GitHub.

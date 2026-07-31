@@ -957,6 +957,34 @@ export function markPaid(entry, date = toISODate(new Date())) {
   return entry;
 }
 
+export function applyDebtBalancePayment(state, debtId, amount) {
+  const debt = (state.debts || []).find((item) => item.id === debtId);
+  if (!debt || amount <= 0) return null;
+  const pay = Math.max(0, toNumber(amount));
+  debt.paidTotal = Math.max(0, toNumber(debt.paidTotal) + pay);
+  debt.balance = Math.max(0, toNumber(debt.balance) - pay);
+  debt.remaining = debt.balance;
+  if (debt.balance <= 0.009) {
+    debt.balance = 0;
+    debt.remaining = 0;
+    debt.status = DEBT_STATUS.PAID;
+  }
+  return debt;
+}
+
+export function reverseDebtBalancePayment(state, debtId, amount) {
+  const debt = (state.debts || []).find((item) => item.id === debtId);
+  if (!debt || amount <= 0) return null;
+  const pay = Math.max(0, toNumber(amount));
+  debt.paidTotal = Math.max(0, toNumber(debt.paidTotal) - pay);
+  debt.balance = Math.max(0, toNumber(debt.balance) + pay);
+  debt.remaining = debt.balance;
+  if (debt.status === DEBT_STATUS.PAID && debt.balance > 0.009) {
+    debt.status = DEBT_STATUS.ATTACK;
+  }
+  return debt;
+}
+
 export function advanceInstallmentCommitment(commitment, paidCount = 1) {
   if (!commitment.totalInstallments) return commitment;
   const current = toNumber(commitment.currentInstallment, 1);

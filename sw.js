@@ -1,4 +1,4 @@
-const CACHE = 'respira-v9';
+const CACHE = 'respira-v10';
 const STATIC = [
   './assets/logos/gestorpro-icon.png',
   './assets/logos/gestorpro-symbol.png',

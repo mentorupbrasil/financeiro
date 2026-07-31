@@ -18,7 +18,6 @@ import {
   ensureMonth,
   formatDateBR,
   history,
-  installmentMeta,
   listCommitments,
   markPaid,
   monthEntries,
@@ -27,6 +26,8 @@ import {
   overview,
   projection,
   registerPayment,
+  applyDebtBalancePayment,
+  reverseDebtBalancePayment,
   renegotiateCommitment,
   rewindInstallmentCommitment,
   settleInstallmentCommitment,
@@ -364,22 +365,29 @@ function renderOverview() {
   const daily = data.daily;
   const proj = projection(state, state.currentMonth, 6);
   const fmtNeed = (value) => (value == null ? '—' : String(value));
+  const owner = (state.settings.ownerName || '').trim();
+  const greeting = owner ? `Olá, ${escapeHtml(owner)}` : 'Orientação do mês';
   return `
-    <section class="grid grid--4">
+    ${renderOrientation(data, greeting)}
+
+    <section class="grid grid--4 section-gap">
       ${metric('Saldo atual', data.currentBalance, data.currentBalance >= 0 ? 'positive' : 'negative')}
-      ${metric('Recebido de verdade', data.receivedTotal, 'positive')}
-      ${metric('Falta pagar', data.totalPending, 'negative')}
       ${metric('Valor livre', data.free, data.free >= 0 ? 'positive' : 'negative')}
-      ${metric('Já reservado', data.reserved)}
-      ${metric('Ainda falta reservar', data.remainingSave)}
-      ${metric('Atrasadas', data.overdueTotal, data.overdueCount ? 'negative' : '')}
-      ${metric('Margem de segurança', data.safety)}
+      ${metric('Falta pagar', data.totalPending, 'negative')}
+      ${metric('Recebido', data.receivedTotal, 'positive')}
+    </section>
+
+    <section class="secondary-metrics section-gap">
+      <div><span>Já reservado</span><strong>${brl(data.reserved)}</strong></div>
+      <div><span>Falta reservar</span><strong>${brl(data.remainingSave)}</strong></div>
+      <div><span>Atrasadas</span><strong class="${data.overdueCount ? 'negative' : ''}">${brl(data.overdueTotal)}</strong></div>
+      <div><span>Margem de segurança</span><strong>${brl(data.safety)}</strong></div>
     </section>
 
     <section class="card section-gap">
       <div class="card-header"><div><h2>Diárias</h2><p>Só receitas recebidas ou garantidas reduzem a meta</p></div></div>
       <div class="card-body">
-        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Em Configurações.</p></div></div>` : `
+        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Em Configurações → Regras.</p></div></div>` : `
         <div class="stat-strip">
           <div><span>Meta mensal</span><strong>${brl(daily.monthlyGoal)}</strong></div>
           <div><span>Planejadas</span><strong>${fmtNeed(daily.plannedDailies)}</strong></div>
@@ -390,7 +398,7 @@ function renderOverview() {
           <div class="list-item"><div class="list-main"><strong>Para pagar as contas</strong></div><div class="list-value">${fmtNeed(daily.needForBills)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Para proteger a margem</strong></div><div class="list-value">${fmtNeed(daily.needForSafety)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Para a meta de guardar</strong></div><div class="list-value">${fmtNeed(daily.needForSave)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Para o fundo das dívidas congeladas</strong></div><div class="list-value">${fmtNeed(daily.needForFrozen)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Incluindo fundo das congeladas</strong></div><div class="list-value">${fmtNeed(daily.needForFrozen)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Total de diárias necessárias</strong></div><div class="list-value">${fmtNeed(daily.needForGoal)}</div></div>
         </div>`}
       </div>
@@ -416,26 +424,62 @@ function renderOverview() {
     </section>
 
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Projeção</h2><p>Somente leitura · não altera seus dados</p></div></div>
+      <div class="card-header"><div><h2>Projeção</h2><p>Somente leitura · próximos 6 meses</p></div></div>
       <div class="card-body">
         ${proj.lightest ? `<p class="muted" style="margin:0 0 12px">Mês mais leve: <strong>${escapeHtml(monthLabel(proj.lightest.monthKey))}</strong> · sai ${brl(proj.lightest.out)}</p>` : ''}
         <div class="table-wrap"><table class="data-table"><thead><tr>
-          <th>Mês</th><th class="number">Entra</th><th class="number">Sai</th><th class="number">Reserva</th><th class="number">Dívidas</th><th class="number">Antes margem</th><th class="number">Livre</th><th>Termina</th><th class="number">Libera</th>
+          <th>Mês</th><th class="number">Entra</th><th class="number">Sai</th><th class="number">Livre</th><th>Termina</th><th class="number">Libera</th>
         </tr></thead><tbody>
           ${proj.rows.map((row) => `<tr>
             <td>${escapeHtml(monthLabel(row.monthKey))}</td>
             <td class="number">${brl(row.income)}</td>
             <td class="number">${brl(row.out)}</td>
-            <td class="number">${brl(row.toReserve)}</td>
-            <td class="number">${brl(row.toDebts)}</td>
-            <td class="number">${brl(row.beforeMargin)}</td>
-            <td class="number"><strong>${brl(row.balance)}</strong></td>
+            <td class="number"><strong class="${row.balance >= 0 ? 'positive' : 'negative'}">${brl(row.balance)}</strong></td>
             <td>${row.ending.length ? escapeHtml(row.ending.join(', ')) : '—'}</td>
             <td class="number">${brl(row.released)}</td>
           </tr>`).join('')}
         </tbody></table></div>
       </div>
     </section>`;
+}
+
+function renderOrientation(data, greeting) {
+  const tips = [];
+  const attack = (data.debtsSummary?.debts || [])
+    .filter((d) => d.status === DEBT_STATUS.ATTACK && d.balance > 0)
+    .toSorted((a, b) => a.priority - b.priority || b.monthlyCost - a.monthlyCost)[0];
+
+  if (data.overdueCount > 0) {
+    tips.push(['danger', `Há ${data.overdueCount} item(ns) atrasado(s) (${brl(data.overdueTotal)}). Priorize quitar ou renegociar.`]);
+  }
+  if (Number(state.settings.dailyNetValue) <= 0) {
+    tips.push(['warn', 'Defina o valor líquido da diária em Configurações para o plano de diárias funcionar.']);
+  }
+  if (data.free < 0) {
+    tips.push(['warn', `Valor livre negativo (${brl(data.free)}). Evite gastos extras até as contas e a margem estarem cobertas.`]);
+  } else if (data.remainingSave > 0) {
+    tips.push(['ok', `Separe ${brl(data.remainingSave)} para a meta de guardar antes de gastar o que sobrar.`]);
+  } else if (data.free > 0) {
+    tips.push(['ok', `Há ${brl(data.free)} livres após contas, reserva e margem.`]);
+  }
+  if (attack) {
+    tips.push(['ok', `Fila de ataque: ${attack.creditor} · saldo ${brl(attack.balance)} · planejado ${brl(attack.plannedMonthly)}.`]);
+  } else if ((data.debtsSummary?.debts || []).some((d) => d.status !== DEBT_STATUS.PAID)) {
+    tips.push(['ok', 'Nenhuma dívida em Atacar. Revise status em Dívidas (Juros / Congelada).']);
+  }
+  if (!tips.length) {
+    tips.push(['ok', 'Mês sob controle. Marque o que entrar e pague o essencial primeiro.']);
+  }
+
+  return `<section class="orientation">
+    <div class="orientation-head">
+      <h2>${greeting}</h2>
+      <p>${escapeHtml(monthLabel(state.currentMonth))}</p>
+    </div>
+    <ul class="orientation-list">
+      ${tips.map(([tone, text]) => `<li><span class="tip-mark ${tone === 'ok' ? '' : tone}" aria-hidden="true">${tone === 'danger' ? '!' : tone === 'warn' ? '·' : '✓'}</span><span>${escapeHtml(text)}</span></li>`).join('')}
+    </ul>
+  </section>`;
 }
 
 function renderMonth() {
@@ -474,9 +518,18 @@ function certaintyLabel(value) {
 
 function renderCommitments() {
   const rows = listCommitments(state);
+  const actionButtons = (item) => {
+    const buttons = [];
+    if (isInstallment(item) && !item.meta.finished) {
+      buttons.push(`<button class="button button--primary button--tiny" type="button" data-action="pay-installment" data-id="${item.id}">Pagar</button>`);
+    }
+    buttons.push(`<button class="button button--ghost button--tiny" type="button" data-action="commitment-more" data-id="${item.id}">Mais</button>`);
+    return buttons.join('');
+  };
   return `<section class="card">
-    <div class="card-header"><div><h2>Compromissos</h2><p>Fixas, parcelas, assinaturas e financiamentos</p></div><button class="button button--primary" type="button" data-action="open-add">Adicionar</button></div>
-    ${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
+    <div class="card-header"><div><h2>Compromissos</h2><p>Contas fixas e parcelas</p></div><button class="button button--primary" type="button" data-action="open-add">Adicionar</button></div>
+    ${rows.length ? `
+      <div class="table-wrap commitments-table"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
       ${rows.map((item) => `<tr>
         <td><div class="table-title">${escapeHtml(item.name)}</div><div class="table-subtitle">${escapeHtml(item.category)}</div></td>
         <td>${escapeHtml(item.typeLabel)}</td>
@@ -485,21 +538,21 @@ function renderCommitments() {
         <td>${formatDateBR(item.nextDue)}</td>
         <td>${item.meta.finished ? 'Encerrado' : (item.meta.total ? `${item.meta.current}/${item.meta.total}` : '—')}</td>
         <td class="number">${item.meta.remainingCount == null ? '—' : `${item.meta.remainingCount} · ${brl(item.meta.remainingValue)}`}</td>
-        <td><div class="row-actions">
-          ${isInstallment(item) && !item.meta.finished ? `
-            <button class="button button--primary button--tiny" type="button" data-action="pay-installment" data-id="${item.id}">Pagar</button>
-            <button class="button button--secondary button--tiny" type="button" data-action="partial-installment" data-id="${item.id}">Parcial</button>
-            <button class="button button--ghost button--tiny" type="button" data-action="advance-installment" data-id="${item.id}">Antecipar</button>
-            <button class="button button--ghost button--tiny" type="button" data-action="settle-installment" data-id="${item.id}">Quitar</button>
-          ` : ''}
-          ${isInstallment(item) ? `<button class="button button--ghost button--tiny" type="button" data-action="undo-installment" data-id="${item.id}">Desfazer</button>
-          <button class="button button--ghost button--tiny" type="button" data-action="renegotiate" data-id="${item.id}">Renegociar</button>` : ''}
-          <button class="button button--ghost button--tiny" type="button" data-action="pause-commitment" data-id="${item.id}">${item.paused ? 'Reativar' : 'Pausar'}</button>
-          <button class="button button--ghost button--tiny" type="button" data-action="edit-commitment" data-id="${item.id}">Editar</button>
-          <button class="button button--ghost button--tiny" type="button" data-action="delete-commitment" data-id="${item.id}">Excluir</button>
-        </div></td>
+        <td><div class="row-actions">${actionButtons(item)}</div></td>
       </tr>`).join('')}
-    </tbody></table></div>` : emptyState('◎', 'Sem compromissos', 'Adicione contas fixas ou parcelas.', 'Adicionar', 'open-add')}
+    </tbody></table></div>
+    <div class="commitment-cards">
+      ${rows.map((item) => `<div class="commitment-card">
+        <div class="commitment-card__top">
+          <div>
+            <strong>${escapeHtml(item.name)}</strong>
+            <div class="commitment-card__meta">${escapeHtml(item.typeLabel)} · ${escapeHtml(item.statusLabel)} · Vence ${formatDateBR(item.nextDue)}${item.meta.total ? ` · ${item.meta.current}/${item.meta.total}` : ''}</div>
+          </div>
+          <div class="list-value">${brl(item.installmentValue || item.amount)}</div>
+        </div>
+        <div class="commitment-card__actions">${actionButtons(item)}</div>
+      </div>`).join('')}
+    </div>` : emptyState('◎', 'Sem compromissos', 'Adicione contas fixas ou parcelas.', 'Adicionar', 'open-add')}
   </section>`;
 }
 
@@ -509,6 +562,9 @@ function isInstallment(item) {
 
 function renderDebts() {
   const summary = debtsSummary(state);
+  const attack = summary.debts
+    .filter((d) => d.status === DEBT_STATUS.ATTACK && d.balance > 0)
+    .toSorted((a, b) => a.priority - b.priority || b.monthlyCost - a.monthlyCost);
   return `
     <section class="grid grid--4">
       ${metric('Saldo total', summary.totalBalance, 'negative')}
@@ -516,21 +572,26 @@ function renderDebts() {
       ${metric('Planejado no mês', summary.plannedMonth)}
       ${metric('Fundo congeladas', summary.frozenFundAccumulated)}
     </section>
+    ${attack.length ? `<div class="callout section-gap"><div class="callout-icon">◈</div><div>
+      <strong>Fila de ataque</strong>
+      <p>Foque em uma por vez. Agora: <strong>${escapeHtml(attack[0].creditor)}</strong> · ${brl(attack[0].balance)}. Juros = só o mínimo. Congelada = não pague agora.</p>
+    </div></div>` : ''}
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Dívidas</h2><p>Fundo congelado não paga automaticamente</p></div>
+      <div class="card-header"><div><h2>Dívidas</h2><p>Registrar pagamento reduz o saldo automaticamente</p></div>
         <button class="button button--primary" type="button" data-action="add-debt">Nova dívida</button>
       </div>
       ${summary.debts.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
         <th>Credor</th><th class="number">Saldo</th><th class="number">Mensal</th><th class="number">Juros/custo</th><th>Prioridade</th><th>Status</th><th></th>
       </tr></thead><tbody>
-        ${summary.debts.map((debt) => `<tr>
+        ${summary.debts.map((debt) => `<tr class="${debt.status === DEBT_STATUS.ATTACK ? 'debt-row--attack' : ''}">
           <td><div class="table-title">${escapeHtml(debt.creditor)}</div><div class="table-subtitle">${escapeHtml(debt.note || '')}</div></td>
           <td class="number">${brl(debt.balance)}</td>
           <td class="number">${brl(debt.plannedMonthly)}</td>
           <td class="number">${brl(debt.monthlyCost)}</td>
           <td>${debt.priority}</td>
-          <td>${escapeHtml(DEBT_STATUS_LABEL[debt.status] || debt.status)}</td>
+          <td><span class="pill pill--${debt.status === DEBT_STATUS.ATTACK ? 'danger' : debt.status === DEBT_STATUS.PAID ? 'success' : debt.status === DEBT_STATUS.INTEREST ? 'warning' : debt.status === DEBT_STATUS.FROZEN ? 'info' : 'neutral'}">${escapeHtml(DEBT_STATUS_LABEL[debt.status] || debt.status)}</span></td>
           <td><div class="row-actions">
+            ${debt.status !== DEBT_STATUS.PAID ? `<button class="button button--primary button--tiny" type="button" data-action="pay-debt" data-id="${debt.id}">Pagar</button>` : ''}
             <button class="button button--ghost button--tiny" type="button" data-action="edit-debt" data-id="${debt.id}">Editar</button>
             <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${debt.id}">Excluir</button>
           </div></td>
@@ -569,22 +630,41 @@ function renderSettings() {
           <label class="field"><span>Meta mensal para guardar (R$)</span><input name="saveGoal" type="number" min="0" step="0.01" value="${s.saveGoal || 0}" required /></label>
           <label class="field"><span>Fundo mensal dívidas congeladas (R$)</span><input name="frozenDebtFund" type="number" min="0" step="0.01" value="${s.frozenDebtFund || 0}" required /></label>
           <label class="field"><span>Margem mínima de segurança (R$)</span><input name="safetyMargin" type="number" min="0" step="0.01" value="${s.safetyMargin}" required /></label>
-          <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /></label>
-          <label class="field"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" /></label>
+          <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /><small class="muted" style="margin-top:-2px">0 = nunca bloquear sozinho</small></label>
+          <label class="field"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" placeholder="Aparece na visão geral" /></label>
         </div>
         <button class="button button--primary" type="submit">Salvar</button>
       </form>
     </section>
-    <section class="card">
-      <div class="card-header"><div><h2>Dados</h2><p>${escapeHtml(brand.domain)} · rev ${syncRevision}</p></div></div>
-      <div class="settings-section backup-actions">
-        <div class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '✓' : '!'}</div><div><strong>${cloudOnline ? 'Neon sincronizada' : 'Neon desatualizada'}</strong><p>${cloudOnline ? 'Último salvamento ok.' : 'Toque em Sincronizar.'}</p></div></div>
-        <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
-        <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup</button>
-        <button class="button button--secondary button--full" type="button" data-action="import-data">Importar</button>
-        <button class="button button--ghost button--full" type="button" data-action="wipe-local">Zerar tudo (local + Neon)</button>
-      </div>
-    </section>
+    <div class="stack" style="gap:14px">
+      <section class="card">
+        <div class="card-header"><div><h2>Dados</h2><p>${escapeHtml(brand.domain)} · rev ${syncRevision}</p></div></div>
+        <div class="settings-section backup-actions">
+          <div class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '✓' : '!'}</div><div><strong>${cloudOnline ? 'Neon sincronizada' : 'Neon desatualizada'}</strong><p>${cloudOnline ? 'Último salvamento ok.' : 'Toque em Sincronizar para puxar ou enviar.'}</p></div></div>
+          <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
+          <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup</button>
+          <button class="button button--secondary button--full" type="button" data-action="import-data">Importar</button>
+        </div>
+      </section>
+      <section class="card">
+        <div class="card-header"><div><h2>Dicas rápidas</h2><p>Ordem no dia do pagamento</p></div></div>
+        <div class="settings-section">
+          <ul class="tips-list">
+            <li><strong>1.</strong> Marque as entradas recebidas.</li>
+            <li><strong>2.</strong> Pague e marque as contas essenciais.</li>
+            <li><strong>3.</strong> Proteja a margem e a meta de guardar.</li>
+            <li><strong>4.</strong> Ataque uma dívida por vez (status Atacar).</li>
+            <li><strong>5.</strong> Baixe um backup depois de mudanças grandes.</li>
+          </ul>
+        </div>
+      </section>
+      <section class="card danger-zone">
+        <div class="card-header"><div><h2>Zona de risco</h2><p>Não tem volta</p></div></div>
+        <div class="settings-section">
+          <button class="button button--danger button--full" type="button" data-action="wipe-local">Zerar tudo (local + Neon)</button>
+        </div>
+      </section>
+    </div>
   </div>`;
 }
 
@@ -601,13 +681,13 @@ function openAddMenu() {
   refs.dialogSubmit.classList.add('hidden');
   refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
   refs.dialogFields.innerHTML = [
-    ['income', 'Receita'],
-    ['bill', 'Conta'],
-    ['installment', 'Compra parcelada'],
-    ['expense', 'Gasto'],
-    ['debt', 'Dívida'],
-    ['reserve', 'Reserva'],
-  ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong></button>`).join('');
+    ['income', 'Receita', 'Salário, diária, extra'],
+    ['bill', 'Conta', 'Fixa ou avulsa'],
+    ['installment', 'Compra parcelada', 'Parcela atual e total'],
+    ['expense', 'Gasto', 'Saída pontual'],
+    ['debt', 'Dívida', 'Credor e saldo'],
+    ['reserve', 'Reserva', 'Dinheiro guardado'],
+  ].map(([id, label, hint]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong><small class="muted" style="display:block;margin-top:4px;font-weight:500">${hint}</small></button>`).join('');
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
@@ -693,6 +773,13 @@ async function handleDialogClick(event) {
     setTimeout(() => openCreate(choice.dataset.createType), 60);
     return;
   }
+  const menuAction = event.target.closest('[data-from-menu][data-action]');
+  if (menuAction) {
+    event.preventDefault();
+    refs.entityDialog.close();
+    setTimeout(() => handleViewClick({ target: menuAction }), 60);
+    return;
+  }
   const del = event.target.closest('[data-action="confirm-delete"]');
   if (del) {
     event.preventDefault();
@@ -718,9 +805,52 @@ async function handleEntitySubmit(event) {
         const month = ensureMonth(state, state.currentMonth);
         const entry = month.entries.find((item) => item.id === dialogContext.id);
         if (!entry) throw new Error('Item não encontrado.');
+        const before = (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0);
         if (entry.type === ENTRY_TYPES.INSTALLMENT) applyInstallmentPayment(state, entry, data);
         else registerPayment(entry, data);
+        const after = (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0);
+        if (entry.debtId) applyDebtBalancePayment(state, entry.debtId, after - before);
       }, 'Pagamento registrado', '');
+      refs.entityDialog.close();
+      dialogContext = null;
+      return;
+    }
+    if (dialogContext.mode === 'pay-debt') {
+      await mutateImportant(async () => {
+        const debt = state.debts.find((item) => item.id === dialogContext.id);
+        if (!debt) throw new Error('Dívida não encontrada.');
+        const amount = Math.max(0, Number(data.amount) || 0);
+        if (amount <= 0) throw new Error('Informe um valor.');
+        applyDebtBalancePayment(state, debt.id, amount);
+        const month = ensureMonth(state, state.currentMonth);
+        let entry = month.entries.find((item) => item.debtId === debt.id);
+        if (!entry) {
+          entry = {
+            id: makeId('entry'),
+            debtId: debt.id,
+            type: ENTRY_TYPES.DEBT,
+            name: debt.creditor,
+            amount,
+            category: 'Dívida',
+            dueDate: data.date || toISODate(new Date()),
+            note: data.note || '',
+            payments: [],
+            status: PAY_STATUS.PENDING,
+          };
+          month.entries.push(entry);
+        } else if (amount > entry.amount) {
+          entry.amount = amount;
+        }
+        const pending = Math.max(0, entry.amount - (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0));
+        if (pending > 0) {
+          registerPayment(entry, {
+            amount: Math.min(amount, pending),
+            date: data.date,
+            method: data.method,
+            note: data.note,
+          });
+        }
+      }, 'Pagamento na dívida', '');
       refs.entityDialog.close();
       dialogContext = null;
       return;
@@ -985,16 +1115,20 @@ async function handleViewClick(event) {
 
   if (action === 'pay-full' && entry) {
     await mutateImportant(async () => {
+      const pending = Math.max(0, entry.amount - (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0));
       if (entry.type === ENTRY_TYPES.INSTALLMENT) applyInstallmentPayment(state, entry, { full: true });
       else markPaid(entry);
+      if (entry.debtId && pending > 0) applyDebtBalancePayment(state, entry.debtId, pending);
     }, 'Pago', entry.name);
     return;
   }
   if (action === 'pay-partial' && entry) return openPartialPay(entry);
   if (action === 'undo-pay' && entry) {
     await mutateImportant(async () => {
+      const paid = (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0);
       if (entry.type === ENTRY_TYPES.INSTALLMENT) undoInstallmentPayment(state, entry);
       else undoPayment(entry);
+      if (entry.debtId && paid > 0) reverseDebtBalancePayment(state, entry.debtId, paid);
     }, 'Desfeito', entry.name);
     return;
   }
@@ -1128,6 +1262,18 @@ async function handleViewClick(event) {
     if (debt) openDebtForm(debt);
     return;
   }
+  if (action === 'pay-debt') {
+    const debt = state.debts.find((item) => item.id === id);
+    if (!debt) return;
+    openDebtPay(debt);
+    return;
+  }
+  if (action === 'commitment-more') {
+    const commitment = state.commitments.find((item) => item.id === id);
+    if (!commitment) return;
+    openCommitmentMore(commitment);
+    return;
+  }
   if (action === 'delete-debt') {
     const debt = state.debts.find((item) => item.id === id);
     if (!debt) return;
@@ -1186,6 +1332,47 @@ function openPartialPay(entry) {
     <label class="field"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
     <label class="field span-2"><span>Observação</span><textarea name="note"></textarea></label>
     <p class="muted span-2">Falta pagar: ${brl(pending)}</p>`;
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
+function openDebtPay(debt) {
+  dialogContext = { mode: 'pay-debt', id: debt.id };
+  refs.dialogEyebrow.textContent = 'PAGAR DÍVIDA';
+  refs.dialogTitle.textContent = debt.creditor;
+  refs.dialogSubmit.classList.remove('hidden');
+  refs.dialogFields.className = 'dialog-fields';
+  const suggested = Math.min(Number(debt.plannedMonthly) || Number(debt.balance) || 0, Number(debt.balance) || 0);
+  refs.dialogFields.innerHTML = `
+    <p class="muted span-2" style="margin:0">Saldo atual: <strong>${brl(debt.balance)}</strong></p>
+    <label class="field"><span>Valor pago</span><input name="amount" type="number" min="0.01" step="0.01" max="${debt.balance}" required value="${suggested || ''}" /></label>
+    <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
+    <label class="field"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
+    <label class="field span-2"><span>Observação</span><textarea name="note"></textarea></label>`;
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
+function openCommitmentMore(commitment) {
+  const item = listCommitments(state).find((row) => row.id === commitment.id) || commitment;
+  refs.dialogEyebrow.textContent = 'AÇÕES';
+  refs.dialogTitle.textContent = commitment.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  const actions = [];
+  if (isInstallment(item) && !item.meta?.finished) {
+    actions.push(['partial-installment', 'Pagamento parcial']);
+    actions.push(['advance-installment', 'Antecipar parcelas']);
+    actions.push(['settle-installment', 'Quitar saldo']);
+  }
+  if (isInstallment(item)) {
+    actions.push(['undo-installment', 'Desfazer último pagamento']);
+    actions.push(['renegotiate', 'Renegociar']);
+  }
+  actions.push(['pause-commitment', item.paused ? 'Reativar' : 'Pausar']);
+  actions.push(['edit-commitment', 'Editar']);
+  actions.push(['delete-commitment', 'Excluir']);
+  refs.dialogFields.innerHTML = actions.map(([action, label]) => `<button class="choice-card" type="button" data-action="${action}" data-id="${commitment.id}" data-from-menu="1"><strong>${label}</strong></button>`).join('');
   hideError(refs.dialogError);
   refs.entityDialog.showModal();
 }
@@ -1365,13 +1552,45 @@ async function resolveConflictLocal() {
 async function syncNow() {
   try {
     const remote = await fetchRemoteState();
-    syncRevision = Number(remote.revision) || syncRevision;
-    localStorage.setItem(REVISION_KEY, String(syncRevision));
+    const remoteRevision = Number(remote.revision) || 0;
     if (remote?.state) {
       const remoteState = normalizeState(remote.state);
       if (remote.updatedAt) remoteState.updatedAt = new Date(remote.updatedAt).toISOString();
+      const localNewer = state?.updatedAt && remoteState.updatedAt
+        && new Date(state.updatedAt).getTime() > new Date(remoteState.updatedAt).getTime()
+        && syncRevision >= remoteRevision;
+      if (localNewer) {
+        const push = await confirmDialog(
+          'Sua cópia local parece mais recente',
+          'Enviar para a nuvem ou carregar a versão do Neon?',
+          'Enviar local',
+        );
+        if (push) {
+          const saved = await pushRemoteState(state, remoteRevision);
+          syncRevision = Number(saved.revision) || remoteRevision + 1;
+          if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+          await saveVault(state);
+          localStorage.setItem(REVISION_KEY, String(syncRevision));
+          cloudOnline = true;
+          setSyncStatus('online', 'Neon sincronizada');
+          render();
+          toast('Enviado', 'Sua versão foi gravada no Neon.');
+          return;
+        }
+        const pull = await confirmDialog('Carregar Neon?', 'Isso substitui os dados locais pela nuvem.', 'Carregar nuvem');
+        if (!pull) return;
+      } else if (state?.updatedAt && remoteState.updatedAt && state.updatedAt !== remoteState.updatedAt) {
+        const ok = await confirmDialog(
+          'Carregar dados da nuvem?',
+          'A versão do Neon vai substituir o que está neste dispositivo.',
+          'Carregar',
+        );
+        if (!ok) return;
+      }
       state = remoteState;
+      syncRevision = remoteRevision || syncRevision;
       await saveVault(state);
+      localStorage.setItem(REVISION_KEY, String(syncRevision));
       cloudOnline = true;
       setSyncStatus('online', 'Neon sincronizada');
       render();
