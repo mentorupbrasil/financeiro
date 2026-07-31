@@ -435,7 +435,6 @@ function renderOverview() {
   const data = overview(state);
   const daily = data.daily;
   const proj = projection(state, state.currentMonth, 6);
-  const fmtNeed = (value) => (value == null ? '—' : String(value));
   const owner = (state.settings.ownerName || '').trim();
   const greeting = owner ? `Olá, ${escapeHtml(owner)}` : 'Orientação do mês';
   return `
@@ -455,24 +454,8 @@ function renderOverview() {
       <div><span>Margem de segurança</span><strong>${brl(data.safety)}</strong></div>
     </section>
 
-    <section class="card section-gap">
-      <div class="card-header"><div><h2>Diárias</h2><p>Só receitas recebidas ou garantidas reduzem a meta</p></div></div>
-      <div class="card-body">
-        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Em Configurações → Regras.</p></div></div>` : `
-        <div class="stat-strip">
-          <div><span>Meta mensal</span><strong>${brl(daily.monthlyGoal)}</strong></div>
-          <div><span>Planejadas</span><strong>${fmtNeed(daily.plannedDailies)}</strong></div>
-          <div><span>Ainda faltam</span><strong>${fmtNeed(daily.missing)}</strong></div>
-          <div><span>Sobra ao atingir</span><strong>${daily.surplus == null ? '—' : brl(daily.surplus)}</strong></div>
-        </div>
-        <div class="list" style="margin-top:12px">
-          <div class="list-item"><div class="list-main"><strong>Para pagar as contas</strong></div><div class="list-value">${fmtNeed(daily.needForBills)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Para proteger a margem</strong></div><div class="list-value">${fmtNeed(daily.needForSafety)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Para a meta de guardar</strong></div><div class="list-value">${fmtNeed(daily.needForSave)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Incluindo fundo das congeladas</strong></div><div class="list-value">${fmtNeed(daily.needForFrozen)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Total de diárias necessárias</strong></div><div class="list-value">${fmtNeed(daily.needForGoal)}</div></div>
-        </div>`}
-      </div>
+    <section class="card daily-panel section-gap">
+      ${renderDailyPanel(daily)}
     </section>
 
     <section class="grid grid--2 section-gap">
@@ -512,6 +495,61 @@ function renderOverview() {
         </tbody></table></div>
       </div>
     </section>`;
+}
+
+function renderDailyPanel(daily) {
+  if (daily.dailyNet <= 0) {
+    return `
+      <div class="card-header"><div><h2>Diárias</h2><p>Quanto precisa trabalhar neste mês</p></div></div>
+      <div class="card-body">
+        <div class="callout callout--warning"><div class="callout-icon">!</div><div>
+          <span class="callout-title">Cadastre o valor da diária</span>
+          <p>Em Ajustes → Valor líquido de uma diária.</p>
+        </div></div>
+      </div>`;
+  }
+
+  const needed = daily.needForGoal ?? 0;
+  const planned = daily.plannedDailies || 0;
+  const missing = daily.missing == null ? 0 : daily.missing;
+  const doneRatio = needed > 0 ? Math.min(1, planned / needed) : (planned > 0 ? 1 : 0);
+  const pct = Math.round(doneRatio * 100);
+  const fmt = (value) => (value == null ? '—' : String(value).replace('.', ','));
+  const steps = [
+    ['Contas do mês', daily.needForBills],
+    ['+ margem de segurança', daily.needForSafety],
+    ['+ meta de guardar', daily.needForSave],
+    ['+ fundo das congeladas', daily.needForFrozen],
+  ];
+
+  return `
+    <div class="card-header"><div><h2>Diárias</h2><p>Cada diária vale ${brl(daily.dailyNet)} · só o que já está recebido ou garantido conta</p></div></div>
+    <div class="card-body daily-panel__body">
+      <div class="daily-hero">
+        <div class="daily-hero__focus">
+          <span class="daily-hero__label">${missing > 0 ? 'Ainda faltam' : planned > 0 ? 'Meta coberta' : 'Necessárias'}</span>
+          <p class="daily-hero__value">${fmt(missing > 0 ? missing : needed)}<span>diárias</span></p>
+        </div>
+        <div class="daily-hero__stats">
+          <div><span>Planejadas</span><em>${fmt(planned)}</em></div>
+          <div><span>Necessárias</span><em>${fmt(needed)}</em></div>
+          <div><span>Meta em R$</span><em>${brl(daily.monthlyGoal)}</em></div>
+          <div><span>Sobra</span><em>${daily.surplus == null ? '—' : brl(daily.surplus)}</em></div>
+        </div>
+      </div>
+      <div class="daily-progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Progresso das diárias">
+        <div class="daily-progress__track"><div class="daily-progress__fill" style="width:${pct}%"></div></div>
+        <span class="daily-progress__caption">${pct}% da meta com as diárias já lançadas</span>
+      </div>
+      <div class="daily-steps">
+        <p class="daily-steps__title">Como chega no total</p>
+        ${steps.map(([label, value], index) => `
+          <div class="daily-step${index === steps.length - 1 ? ' daily-step--total' : ''}">
+            <span>${escapeHtml(label)}</span>
+            <em>${fmt(value)}</em>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 function renderOrientation(data, greeting) {

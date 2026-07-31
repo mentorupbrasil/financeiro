@@ -439,8 +439,136 @@ a { color: inherit; }
 .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); border-bottom: 1px solid var(--border); }
 .stat-strip > div { padding: 14px 16px; border-right: 1px solid var(--border); }
 .stat-strip > div:last-child { border-right: 0; }
-.stat-strip span { display: block; color: var(--muted); font-size: .66rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-.stat-strip strong { display: block; margin-top: 5px; font-size: 1.05rem; font-weight: 700; }
+.stat-strip span { display: block; color: var(--muted); font-size: .66rem; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+.stat-strip strong { display: block; margin-top: 5px; font-size: 1.05rem; font-weight: 500; }
+
+.daily-panel__body { display: grid; gap: 16px; }
+.daily-hero {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.9fr) minmax(0, 1.4fr);
+  gap: 16px;
+  align-items: stretch;
+}
+.daily-hero__focus {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background:
+    linear-gradient(160deg, rgba(114, 227, 173, .18), rgba(114, 227, 173, .04) 55%),
+    var(--surface-2);
+  border: 1px solid rgba(114, 227, 173, .28);
+}
+.daily-hero__label {
+  display: block;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.daily-hero__value {
+  margin: 6px 0 0;
+  font-size: 2.35rem;
+  font-weight: 500;
+  letter-spacing: -.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.daily-hero__value span {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: .95rem;
+  font-weight: 450;
+  letter-spacing: 0;
+  color: var(--muted);
+  vertical-align: 0.35em;
+}
+.daily-hero__stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.daily-hero__stats > div {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+.daily-hero__stats span {
+  display: block;
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 450;
+}
+.daily-hero__stats em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: .98rem;
+  font-weight: 500;
+  letter-spacing: -.015em;
+  font-variant-numeric: tabular-nums;
+}
+.daily-progress { display: grid; gap: 7px; }
+.daily-progress__track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.daily-progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5fd49a, var(--primary));
+  min-width: 0;
+  transition: width .25s ease;
+}
+.daily-progress__caption {
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 450;
+}
+.daily-steps {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+.daily-steps__title {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.daily-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: .88rem;
+  font-weight: 450;
+}
+.daily-step:last-child { border-bottom: 0; }
+.daily-step em {
+  font-style: normal;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.daily-step--total {
+  background: rgba(114, 227, 173, .08);
+  font-weight: 500;
+}
+.daily-step--total span { color: var(--ink); }
+.callout-title { display: block; font-size: .84rem; font-weight: 500; }
 
 .orientation {
   display: grid; gap: 10px; padding: 18px;
@@ -732,6 +860,9 @@ body.dialog-open { overflow: hidden; touch-action: none; }
   .stat-strip > div { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
   .stat-strip > div:nth-child(2n) { border-right: 0; }
   .stat-strip > div:nth-last-child(-n+2) { border-bottom: 0; }
+  .daily-hero { grid-template-columns: 1fr; gap: 12px; }
+  .daily-hero__value { font-size: 2.1rem; }
+  .daily-hero__stats { grid-template-columns: 1fr 1fr; }
   .commitments-table { display: none; }
   .commitment-cards { display: block; padding: 4px 16px 12px; }
   .commitment-card { display: block; }
