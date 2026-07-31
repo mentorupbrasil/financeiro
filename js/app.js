@@ -485,11 +485,16 @@ function renderOrientation(data, greeting) {
 function renderMonth() {
   const entries = monthEntries(state, state.currentMonth, monthFilter);
   const filters = [
-    ['all', 'Tudo'], ['pending', 'Pendente'], ['paid', 'Pago'], ['overdue', 'Atrasado'], ['in', 'Entradas'], ['out', 'Saídas'],
+    ['all', 'Tudo'],
+    ['pending', 'Pendente'],
+    ['paid', 'Pago'],
+    ['overdue', 'Atrasado'],
+    ['in', 'Entradas'],
+    ['out', 'Saídas'],
   ];
   return `
-    <div class="filter-bar">
-      ${filters.map(([id, label]) => `<button class="chip ${monthFilter === id ? 'active' : ''}" type="button" data-action="filter" data-id="${id}">${label}</button>`).join('')}
+    <div class="segmented" role="tablist" aria-label="Filtrar lançamentos">
+      ${filters.map(([id, label]) => `<button class="segmented__item ${monthFilter === id ? 'is-active' : ''}" type="button" role="tab" aria-selected="${monthFilter === id}" data-action="filter" data-id="${id}"><span>${label}</span></button>`).join('')}
     </div>
     <section class="card section-gap">
       ${entries.length ? `<div class="list list--actions">${entries.map((item) => `
