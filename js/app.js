@@ -297,10 +297,11 @@ function renderDashboard() {
     .toSorted((a, b) => (a.status === STATUS.ATTACK ? 0 : 1) - (b.status === STATUS.ATTACK ? 0 : 1) || a.priority - b.priority)
     .slice(0, 4);
   const tipLevelClass = { danger: 'callout--danger', warning: 'callout--warning', ok: '', info: 'callout--info' };
+  const tips = guide.tips.slice(0, 3);
 
   return `
     <div class="grid grid--dashboard">
-      <section class="card card--dark status-hero">
+      <section class="card status-hero">
         <div>
           <span class="status-label"><span class="status-dot" style="background:${statusConfig.dot}"></span>${statusConfig.label}</span>
           <h2>${statusConfig.title}</h2>
@@ -338,38 +339,6 @@ function renderDashboard() {
       </section>
     </div>
 
-    <section class="card section-gap">
-      <div class="card-header"><div><h2>Orientação do mês</h2><p>O que fazer agora para sair da dívida e controlar o gasto.</p></div></div>
-      <div class="card-body grid grid--2">
-        <div class="grid coach-stack">
-          ${guide.tips.map((tip) => `<div class="callout ${tipLevelClass[tip.level] || ''}"><div class="callout-icon">${tip.level === 'danger' ? '!' : tip.level === 'ok' ? '✓' : 'i'}</div><div><strong>${escapeHtml(tip.title)}</strong><p>${escapeHtml(tip.body)}</p></div></div>`).join('')}
-        </div>
-        <div class="grid">
-          <div class="spend-board">
-            <p class="eyebrow">O QUE VOCÊ PODE GASTAR</p>
-            <div class="stat-strip">
-              <div><span>No mês</span><strong class="${guide.spendPlan.canSpendFreely ? 'positive' : ''}">${brl(guide.spendPlan.monthLimit)}</strong></div>
-              <div><span>Por semana</span><strong>${brl(guide.spendPlan.weekLimit)}</strong></div>
-              <div><span>Ainda livre</span><strong class="${guide.spendPlan.remaining < 0 ? 'negative' : ''}">${brl(guide.spendPlan.remaining)}</strong></div>
-            </div>
-            <p class="muted coach-note">${guide.spendPlan.canSpendFreely
-              ? `Média de ${brl(guide.spendPlan.dayLimit)}/dia sem mexer em conta, reserva ou dívida. Guarde ${brl(guide.spendPlan.saveTarget)} e ataque com ${brl(guide.spendPlan.debtTarget)}.`
-              : 'Ainda não há dinheiro livre seguro. Feche o déficit ou complete a folga mínima antes de gastar.'}</p>
-          </div>
-          <div class="spend-board">
-            <p class="eyebrow">VIAGENS → LIBERDADE</p>
-            <div class="stat-strip">
-              <div><span>Agora</span><strong>${number(guide.freedomPlan.tripsNow)}</strong></div>
-              <div><span>Respirar</span><strong>${guide.freedomPlan.tripsToBreathe == null ? '—' : number(guide.freedomPlan.tripsToBreathe)}</strong></div>
-              <div><span>Liberdade</span><strong>${guide.freedomPlan.tripsToFreedom == null ? '—' : number(guide.freedomPlan.tripsToFreedom)}</strong></div>
-            </div>
-            <p class="muted coach-note">${escapeHtml(guide.freedomPlan.headline)}</p>
-          </div>
-          ${guide.cuts.length ? `<div class="spend-board"><p class="eyebrow">ONDE ECONOMIZAR</p><div class="list">${guide.cuts.map((cut) => `<div class="list-item"><div class="list-main"><strong>${escapeHtml(cut.name)}</strong><small>${escapeHtml(cut.category)} · ${escapeHtml(cut.tip)}</small></div><div class="list-value">${brl(cut.amount)}</div></div>`).join('')}</div></div>` : ''}
-        </div>
-      </div>
-    </section>
-
     <section class="grid grid--4 section-gap">
       ${metricCard('Entradas planejadas', calc.totalIncome, '↗', `${brl(calc.receivedIncome)} já recebido`, 'positive')}
       ${metricCard('Saídas planejadas', calc.plannedOut, '▤', `${brl(calc.paidOut)} já pago`)}
@@ -377,9 +346,41 @@ function renderDashboard() {
       ${metricCard('Saldo de dívidas', calc.debtTotal, '◎', `${brl(calc.frozenDebt)} está congelado`)}
     </section>
 
+    <section class="card section-gap">
+      <div class="card-header"><div><h2>Orientação do mês</h2><p>Prioridades agora · quanto pode gastar · viagens</p></div></div>
+      <div class="card-body grid grid--2">
+        <div class="grid coach-stack">
+          ${tips.map((tip) => `<div class="callout ${tipLevelClass[tip.level] || ''}"><div class="callout-icon">${tip.level === 'danger' ? '!' : tip.level === 'ok' ? '✓' : 'i'}</div><div><strong>${escapeHtml(tip.title)}</strong><p>${escapeHtml(tip.body)}</p></div></div>`).join('')}
+        </div>
+        <div class="grid">
+          <div class="spend-board">
+            <p class="eyebrow">O que você pode gastar</p>
+            <div class="stat-strip">
+              <div><span>No mês</span><strong class="${guide.spendPlan.canSpendFreely ? 'positive' : ''}">${brl(guide.spendPlan.monthLimit)}</strong></div>
+              <div><span>Por semana</span><strong>${brl(guide.spendPlan.weekLimit)}</strong></div>
+              <div><span>Ainda livre</span><strong class="${guide.spendPlan.remaining < 0 ? 'negative' : ''}">${brl(guide.spendPlan.remaining)}</strong></div>
+            </div>
+            <p class="muted coach-note">${guide.spendPlan.canSpendFreely
+              ? `Média de ${brl(guide.spendPlan.dayLimit)}/dia. Guarde ${brl(guide.spendPlan.saveTarget)} e ataque com ${brl(guide.spendPlan.debtTarget)}.`
+              : 'Ainda não há dinheiro livre seguro. Feche o déficit ou complete a folga mínima antes de gastar.'}</p>
+          </div>
+          <div class="spend-board">
+            <p class="eyebrow">Viagens → liberdade</p>
+            <div class="stat-strip">
+              <div><span>Agora</span><strong>${number(guide.freedomPlan.tripsNow)}</strong></div>
+              <div><span>Respirar</span><strong>${guide.freedomPlan.tripsToBreathe == null ? '—' : number(guide.freedomPlan.tripsToBreathe)}</strong></div>
+              <div><span>Liberdade</span><strong>${guide.freedomPlan.tripsToFreedom == null ? '—' : number(guide.freedomPlan.tripsToFreedom)}</strong></div>
+            </div>
+            <p class="muted coach-note">${escapeHtml(guide.freedomPlan.headline)}</p>
+          </div>
+          ${guide.cuts.length ? `<div class="spend-board"><p class="eyebrow">Onde economizar</p><div class="list">${guide.cuts.slice(0, 3).map((cut) => `<div class="list-item"><div class="list-main"><strong>${escapeHtml(cut.name)}</strong><small>${escapeHtml(cut.category)}</small></div><div class="list-value">${brl(cut.amount)}</div></div>`).join('')}</div></div>` : ''}
+        </div>
+      </div>
+    </section>
+
     <section class="grid grid--2 section-gap">
       <div class="card">
-        <div class="card-header"><div><h2>Quantas diárias precisa?</h2><p>Fechar · respirar · liberdade (reserva + ritmo de quitação).</p></div><button class="button button--ghost" type="button" data-action="add-income">Editar renda</button></div>
+        <div class="card-header"><div><h2>Quantas diárias precisa?</h2><p>Fechar · respirar · liberdade</p></div><button class="button button--ghost" type="button" data-action="add-income">Editar renda</button></div>
         <div class="stat-strip">
           <div><span>Planejadas</span><strong>${number(calc.dailyCount)}</strong></div>
           <div><span>Para fechar</span><strong>${calc.tripsToClose == null ? '—' : number(calc.tripsToClose)}</strong></div>
@@ -392,12 +393,12 @@ function renderDashboard() {
               <strong>${row.trips}</strong><small>diárias</small><div class="scenario-value">${brl(row.surplus, true)}</div>
             </div>`).join('')}
           </div>
-          ${calc.dailyRate > 0 ? `<p class="muted coach-note">Cada diária extra de ${brl(calc.extraTripValue)}: ~${brl(calc.extraTripSplit.spend)} livre, ~${brl(calc.extraTripSplit.save)} guardado, ~${brl(calc.extraTripSplit.debt)} em ataque.</p>` : ''}
+          ${calc.dailyRate > 0 ? `<p class="muted coach-note" style="margin:12px 0 0;padding:0">Cada diária extra de ${brl(calc.extraTripValue)}: ~${brl(calc.extraTripSplit.spend)} livre · ~${brl(calc.extraTripSplit.save)} guardado · ~${brl(calc.extraTripSplit.debt)} em ataque.</p>` : ''}
         </div>
       </div>
 
       <div class="card">
-        <div class="card-header"><div><h2>Próximas contas</h2><p>Primeiro o que vence e ainda não foi pago.</p></div><button class="button button--ghost" type="button" data-action="go-bills">Ver todas</button></div>
+        <div class="card-header"><div><h2>Próximas contas</h2><p>O que vence e ainda não foi pago</p></div><button class="button button--ghost" type="button" data-action="go-bills">Ver todas</button></div>
         <div class="card-body">
           ${upcoming.length ? `<div class="list">${upcoming.map((bill) => `<div class="list-item">
             <div class="list-icon">${bill.overdue ? '!' : bill.dueDay || '•'}</div>
@@ -410,7 +411,7 @@ function renderDashboard() {
 
     <section class="grid grid--2 section-gap">
       <div class="card">
-        <div class="card-header"><div><h2>Fila de ataque</h2><p>Uma dívida por vez, na ordem definida.</p></div><button class="button button--ghost" type="button" data-action="go-debts">Abrir dívidas</button></div>
+        <div class="card-header"><div><h2>Fila de ataque</h2><p>Uma dívida por vez</p></div><button class="button button--ghost" type="button" data-action="go-debts">Abrir dívidas</button></div>
         <div class="card-body">
           ${attackList.length ? `<div class="list">${attackList.map((debt, index) => `<div class="list-item">
             <div class="list-icon">${index + 1}</div>
@@ -421,11 +422,11 @@ function renderDashboard() {
       </div>
 
       <div class="card card--accent">
-        <div class="card-header"><div><h2>Fechamento do mês</h2><p>Cria o próximo mês e carrega apenas itens recorrentes.</p></div>${calc.month.closed ? statusPill('QUITADA') : ''}</div>
+        <div class="card-header"><div><h2>Fechamento do mês</h2><p>Cria o próximo mês com itens recorrentes</p></div>${calc.month.closed ? statusPill('QUITADA') : ''}</div>
         <div class="card-body grid">
           <div class="callout ${calc.status === 'deficit' ? 'callout--danger' : calc.status === 'tight' ? 'callout--warning' : ''}">
             <div class="callout-icon">${calc.status === 'breathe' ? '✓' : '!'}</div>
-            <div><strong>${calc.month.closed ? 'Este mês já está fechado' : 'Confira antes de fechar'}</strong><p>Marque o que foi recebido e pago, registre os gastos dos envelopes e informe quanto pagou em cada dívida.</p></div>
+            <div><strong>${calc.month.closed ? 'Este mês já está fechado' : 'Confira antes de fechar'}</strong><p>Marque o que foi recebido e pago, registre os envelopes e informe quanto pagou em cada dívida.</p></div>
           </div>
           <button class="button button--primary button--full" type="button" data-action="close-month" ${calc.month.closed ? 'disabled' : ''}>Fechar ${escapeHtml(monthLabel(state.currentMonth))} e abrir ${escapeHtml(monthLabel(addMonths(state.currentMonth, 1)))}</button>
         </div>
@@ -506,13 +507,13 @@ function renderEnvelopes() {
   const calc = calculateMonth(state);
   const guide = buildGuidance(state);
   return `<div class="grid">
-    <section class="card card--dark">
-      <div class="card-body">
-        <p class="eyebrow" style="color:#86efac">LIMITE DO MÊS</p>
-        <div class="hero-footer" style="margin-top:0"><div><strong class="hero-value">${brl(calc.spendBudget)}</strong><span class="hero-kicker">Pode gastar sem mexer nas contas</span></div><div class="hero-action">Já gastou <strong>${brl(calc.envelopeSpent)}</strong>. Ainda pode <strong>${brl(calc.envelopeRemaining)}</strong>.</div></div>
-        <div class="progress progress--dark" style="margin-top:22px"><span style="width:${clampPercent(calc.spendBudget > 0 ? calc.envelopeSpent / calc.spendBudget * 100 : 0)}%"></span></div>
-        <p class="coach-note" style="color:#c4d1c8;margin-top:14px">${guide.spendPlan.canSpendFreely
-          ? `Controle: no máximo ${brl(guide.spendPlan.weekLimit)} por semana (~${brl(guide.spendPlan.dayLimit)}/dia). O resto do mês é conta, reserva e dívida.`
+    <section class="card status-hero">
+      <div class="card-body" style="padding:0">
+        <p class="eyebrow">Limite do mês</p>
+        <div class="hero-footer" style="margin-top:8px"><div><strong class="hero-value">${brl(calc.spendBudget)}</strong><span class="hero-kicker">Pode gastar sem mexer nas contas</span></div><div class="hero-action">Já gastou <strong>${brl(calc.envelopeSpent)}</strong>. Ainda pode <strong>${brl(calc.envelopeRemaining)}</strong>.</div></div>
+        <div class="progress" style="margin-top:18px"><span style="width:${clampPercent(calc.spendBudget > 0 ? calc.envelopeSpent / calc.spendBudget * 100 : 0)}%"></span></div>
+        <p class="coach-note" style="margin:14px 0 0;padding:0">${guide.spendPlan.canSpendFreely
+          ? `No máximo ${brl(guide.spendPlan.weekLimit)} por semana (~${brl(guide.spendPlan.dayLimit)}/dia).`
           : 'Sem dinheiro livre seguro neste mês. Qualquer gasto fora do essencial aprofunda o buraco.'}</p>
       </div>
     </section>
