@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#72e3ad" />
-  <meta name="description" content="Respira by GestorPro — comando financeiro pessoal em financeiro.gestorpro.sbs." />
+  <meta name="description" content="Respira by GestorPro — controle financeiro pessoal." />
   <meta name="robots" content="noindex,nofollow" />
   <title>Respira — by GestorPro</title>
   <link rel="icon" href="assets/logos/gestorpro-icon.png" type="image/png" />
@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <noscript>Este sistema precisa de JavaScript ativado.</noscript>
+  <noscript>Ative o JavaScript para usar o Respira.</noscript>
 
   <div id="boot-screen" class="boot-screen" aria-live="polite">
     <img class="brand-logo" src="assets/logos/gestorpro-symbol.png" alt="" width="56" height="56" />
@@ -29,39 +29,33 @@
       <img class="brand-logo brand-logo--lg" src="assets/logos/gestorpro-symbol.png" alt="GestorPro" width="72" height="72" />
       <h1 id="lock-title">Respira</h1>
       <p class="byline">by Gestor<span class="brand-pro">Pro</span></p>
-      <p id="lock-copy" class="muted">Comando financeiro pessoal · financeiro.gestorpro.sbs</p>
+      <p id="lock-copy" class="muted">financeiro.gestorpro.sbs</p>
       <form id="unlock-form" class="stack" autocomplete="off">
         <label class="field">
-          <span>PIN de acesso</span>
+          <span>PIN</span>
           <input id="unlock-pin" inputmode="numeric" type="password" minlength="4" maxlength="12" autocomplete="current-password" value="0707" required />
         </label>
         <button class="button button--primary button--large" type="submit">Entrar</button>
       </form>
       <p id="unlock-error" class="form-error hidden" role="alert"></p>
-      <p class="muted lock-hint">PIN fixo do sistema. Sessão lembra neste navegador até você bloquear.</p>
     </div>
   </div>
 
   <div id="app" class="app-shell hidden">
-    <aside class="sidebar" aria-label="Navegação principal">
-      <a href="#dashboard" class="brand-row sidebar-brand" data-nav="dashboard" aria-label="Ir para visão geral">
-        <img class="brand-logo" src="assets/logos/gestorpro-symbol.png" alt="" width="36" height="36" />
-        <div>
-          <strong>Respira</strong>
-          <small>by Gestor<span class="brand-pro">Pro</span></small>
-        </div>
+    <aside class="sidebar" aria-label="Navegação">
+      <a href="#overview" class="brand-row sidebar-brand" data-nav="overview">
+        <img class="brand-logo" src="assets/logos/gestorpro-symbol.png" alt="" width="32" height="32" />
+        <div><strong>Respira</strong><small>by Gestor<span class="brand-pro">Pro</span></small></div>
       </a>
       <nav class="nav-list">
-        <button class="nav-item active" data-view="dashboard" type="button"><span aria-hidden="true">⌂</span><span>Visão geral</span></button>
-        <button class="nav-item" data-view="incomes" type="button"><span aria-hidden="true">↗</span><span>Entradas</span></button>
-        <button class="nav-item" data-view="bills" type="button"><span aria-hidden="true">▤</span><span>Contas</span></button>
-        <button class="nav-item" data-view="debts" type="button"><span aria-hidden="true">◎</span><span>Dívidas</span></button>
-        <button class="nav-item" data-view="envelopes" type="button"><span aria-hidden="true">▱</span><span>Envelopes</span></button>
-        <button class="nav-item" data-view="projection" type="button"><span aria-hidden="true">⌁</span><span>Projeção</span></button>
-        <button class="nav-item" data-view="settings" type="button"><span aria-hidden="true">⚙</span><span>Configurações</span></button>
+        <button class="nav-item active" data-view="overview" type="button"><span>⌂</span><span>Visão geral</span></button>
+        <button class="nav-item" data-view="month" type="button"><span>▤</span><span>Mês atual</span></button>
+        <button class="nav-item" data-view="commitments" type="button"><span>◎</span><span>Compromissos</span></button>
+        <button class="nav-item" data-view="history" type="button"><span>⌁</span><span>Histórico</span></button>
+        <button class="nav-item" data-view="settings" type="button"><span>⚙</span><span>Configurações</span></button>
       </nav>
       <div class="sidebar-footer">
-        <div class="privacy-note"><span class="status-dot" id="sync-dot"></span><span id="sync-label">Sincronizando…</span></div>
+        <div class="privacy-note"><span class="status-dot" id="sync-dot"></span><span id="sync-label">Nuvem</span></div>
         <button id="lock-now" class="button button--ghost button--full" type="button">Bloquear</button>
       </div>
     </aside>
@@ -69,20 +63,19 @@
     <main class="main-content">
       <header class="topbar">
         <div>
-          <p class="eyebrow" id="view-eyebrow">COMANDO DO MÊS</p>
+          <p class="eyebrow" id="view-eyebrow">HOJE</p>
           <h1 id="view-title">Visão geral</h1>
         </div>
         <div class="topbar-actions">
-          <label class="month-picker" aria-label="Mês de referência">
+          <label class="month-picker" aria-label="Mês">
             <span>Mês</span>
             <input id="month-input" type="month" />
           </label>
-          <button id="install-app" class="button button--secondary hidden" type="button">Instalar app</button>
-          <button id="quick-add" class="button button--primary" type="button"><span aria-hidden="true">＋</span> Adicionar</button>
+          <button id="install-app" class="button button--secondary hidden" type="button">Instalar</button>
+          <button id="quick-add" class="button button--primary" type="button">Adicionar</button>
         </div>
       </header>
-
-      <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+      <div id="toast-region" class="toast-region" aria-live="polite"></div>
       <section id="view-root" class="view-root" aria-live="polite"></section>
     </main>
   </div>
@@ -90,14 +83,14 @@
   <dialog id="entity-dialog" class="dialog">
     <form id="entity-form" method="dialog" class="dialog-card">
       <div class="dialog-header">
-        <div><p id="dialog-eyebrow" class="eyebrow">NOVO REGISTRO</p><h2 id="dialog-title">Adicionar</h2></div>
-        <button class="icon-button" value="cancel" type="button" data-close-dialog aria-label="Fechar">×</button>
+        <div><p id="dialog-eyebrow" class="eyebrow">ADICIONAR</p><h2 id="dialog-title">Novo</h2></div>
+        <button class="icon-button" type="button" data-close-dialog aria-label="Fechar">×</button>
       </div>
       <div id="dialog-fields" class="dialog-fields"></div>
       <p id="dialog-error" class="form-error hidden" role="alert"></p>
       <div class="dialog-actions">
-        <button class="button button--ghost" value="cancel" type="button" data-close-dialog>Cancelar</button>
-        <button id="dialog-submit" class="button button--primary" value="default" type="submit">Salvar</button>
+        <button class="button button--ghost" type="button" data-close-dialog>Cancelar</button>
+        <button id="dialog-submit" class="button button--primary" type="submit">Salvar</button>
       </div>
     </form>
   </dialog>

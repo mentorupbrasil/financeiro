@@ -7,38 +7,26 @@ export function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-export function brl(value, compact = false) {
-  return new Intl.NumberFormat('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-    notation: compact ? 'compact' : 'standard',
-    maximumFractionDigits: compact ? 1 : 2,
-  }).format(Number(value) || 0);
+export function brl(value) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
 }
 
 export function number(value, digits = 0) {
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: digits }).format(Number(value) || 0);
 }
 
-export function percent(value) {
-  return `${number(value, 1)}%`;
-}
-
 export function statusPill(status) {
-  const normalized = String(status || '').toUpperCase();
   const map = {
-    ATACAR: ['warning', 'Atacar'],
-    JUROS: ['danger', 'Juros'],
-    CONGELADA: ['info', 'Congelada'],
-    QUITADA: ['success', 'Quitada'],
-    RESPIRA: ['success', 'Respira'],
-    APERTADO: ['warning', 'Apertado'],
-    DÉFICIT: ['danger', 'Déficit'],
-    PAGO: ['success', 'Pago'],
-    PENDENTE: ['neutral', 'Pendente'],
-    RECEBIDO: ['success', 'Recebido'],
+    pending: ['warning', 'Pendente'],
+    paid: ['success', 'Pago'],
+    partial: ['info', 'Parcial'],
+    overdue: ['danger', 'Atrasado'],
+    cancelled: ['neutral', 'Cancelado'],
+    renegotiated: ['neutral', 'Renegociado'],
+    Pendente: ['warning', 'Pendente'],
+    Pago: ['success', 'Pago'],
   };
-  const [type, label] = map[normalized] || ['neutral', normalized || '—'];
+  const [type, label] = map[status] || ['neutral', status || '—'];
   return `<span class="pill pill--${type}">${escapeHtml(label)}</span>`;
 }
 
@@ -51,11 +39,6 @@ export function emptyState(icon, title, copy, buttonLabel = '', action = '') {
   </div>`;
 }
 
-export function formatDueDay(day) {
-  const value = Number(day) || 0;
-  return value ? `Dia ${value}` : 'Sem vencimento';
-}
-
-export function clampPercent(value) {
-  return Math.max(0, Math.min(100, Number(value) || 0));
+export function metric(label, value, tone = '') {
+  return `<article class="card metric-card"><div class="metric-top"><span class="metric-label">${escapeHtml(label)}</span></div><strong class="metric-value ${tone}">${brl(value)}</strong></article>`;
 }

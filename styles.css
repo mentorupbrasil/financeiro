@@ -270,8 +270,33 @@ a { color: inherit; }
 .pill--success { background: var(--primary-soft); color: var(--success); }
 .pill--danger { background: var(--danger-soft); color: var(--danger); }
 .pill--warning { background: var(--warning-soft); color: var(--warning); }
-.pill--info { background: var(--info-soft); color: var(--info); }
+.pill--info { background: #dbeafe; color: #1d4ed8; }
 .pill--neutral { background: #f3f3f3; color: #525252; }
+
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  min-height: 34px; border: 1px solid var(--border); border-radius: 999px;
+  background: #fff; color: var(--muted); padding: 6px 12px; font-size: .8rem; font-weight: 600;
+}
+.chip.active, .chip:hover { border-color: transparent; background: #dbeafe; color: #1d4ed8; }
+.choice-card {
+  border: 1px solid var(--border); border-radius: 12px; background: #fff; padding: 16px;
+  text-align: left; font-weight: 650;
+}
+.choice-card:hover { border-color: var(--primary); background: var(--primary-soft); }
+.dialog-fields--choices { grid-template-columns: repeat(2, 1fr); }
+.button--tiny { min-height: 30px; padding: 4px 10px; font-size: .72rem; border-radius: 8px; }
+.list--actions .list-item, .entry-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 12px 0;
+}
+.entry-row .row-actions {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px;
+}
+.span-2 { grid-column: 1 / -1; }
+
+@media (max-width: 840px) {
+  .nav-list { grid-template-columns: repeat(5, 1fr); }
+}
 
 .list { display: grid; }
 .list-item { min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -420,7 +445,7 @@ a { color: inherit; }
     border: 0; border-top: 1px solid var(--border); background: #fff;
   }
   .sidebar-brand, .sidebar-footer { display: none; }
-  .nav-list { height: 100%; grid-template-columns: repeat(7, 1fr); gap: 2px; overflow-x: auto; }
+  .nav-list { height: 100%; grid-template-columns: repeat(5, 1fr); gap: 2px; overflow-x: auto; }
   .nav-item {
     min-width: 58px; height: 52px; flex-direction: column; justify-content: center; gap: 2px;
     padding: 4px 2px; border-radius: 10px; font-size: .58rem; text-align: center;
