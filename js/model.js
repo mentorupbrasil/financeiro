@@ -412,7 +412,7 @@ export function normalizeState(input) {
   return state;
 }
 
-function commitmentActiveInMonth(commitment, monthKey) {
+export function commitmentActiveInMonth(commitment, monthKey) {
   if (commitment.paused || commitment.status === 'paused' || commitment.status === 'finished' || commitment.status === 'cancelled') return false;
   if (commitment.startDate && monthKey < commitment.startDate.slice(0, 7)) return false;
   if (commitment.endDate && monthKey > commitment.endDate.slice(0, 7)) return false;

@@ -36,6 +36,7 @@ import {
   makeId,
   toISODate,
   dueDateInMonth,
+  commitmentActiveInMonth,
 } from './model.js';
 import { brand } from './config.js';
 import { checkSession, fetchRemoteState, loginRemote, logoutRemote, pushRemoteState } from './sync.js';
@@ -666,45 +667,79 @@ function debtModePill(key) {
   return `<span class="pill pill--${tone}">${escapeHtml(debtModeLabel(key))}</span>`;
 }
 
-function listUnifiedDebts() {
-  const commitments = listCommitments(state).map((item) => {
-    const parcelada = isInstallment(item);
-    const mode = item.paused || item.status === 'paused' ? 'frozen' : (parcelada ? 'parcelada' : 'fixa');
-    return {
-      source: 'commitment',
-      id: item.id,
-      name: item.name,
-      detail: item.category,
-      mode,
-      value: item.installmentValue || item.amount,
-      valueLabel: parcelada ? 'Parcela' : 'Mensal',
-      nextDue: item.nextDue,
-      extra: parcelada
-        ? (item.meta.finished ? 'Encerrada' : `${item.meta.current || '—'}/${item.meta.total || '—'} · falta ${item.meta.remainingCount ?? '—'} · ${brl(item.meta.remainingValue || 0)}`)
-        : (item.paused ? 'Pausada / congelada' : 'Todo mês'),
-      raw: item,
-    };
-  });
+function listUnifiedDebts(monthKey = state.currentMonth) {
+  const commitments = listCommitments(state)
+    .filter((item) => {
+      if (item.paused || item.status === 'paused') {
+        if (isInstallment(item) && item.nextDueDate) return monthKey >= item.nextDueDate.slice(0, 7);
+        if (item.startDate) return monthKey >= item.startDate.slice(0, 7);
+        return monthKey >= currentMonthKey();
+      }
+      return commitmentActiveInMonth(item, monthKey);
+    })
+    .map((item) => {
+      const parcelada = isInstallment(item);
+      const mode = item.paused || item.status === 'paused' ? 'frozen' : (parcelada ? 'parcelada' : 'fixa');
+      const number = parcelada && item.nextDueDate
+        ? (() => {
+            const nextKey = item.nextDueDate.slice(0, 7);
+            const [sy, sm] = nextKey.split('-').map(Number);
+            const [ty, tm] = monthKey.split('-').map(Number);
+            return (item.currentInstallment || 1) + ((ty - sy) * 12 + (tm - sm));
+          })()
+        : null;
+      return {
+        source: 'commitment',
+        id: item.id,
+        name: item.name,
+        detail: item.category,
+        mode,
+        value: item.installmentValue || item.amount,
+        valueLabel: parcelada ? 'Parcela' : 'Mensal',
+        nextDue: parcelada
+          ? dueDateInMonth(monthKey, item.dueDay || Number(String(item.nextDueDate || '').slice(8, 10)) || 1)
+          : dueDateInMonth(monthKey, item.dueDay || 1),
+        extra: parcelada
+          ? (item.meta.finished ? 'Encerrada' : `${number || item.meta.current || '—'}/${item.meta.total || '—'} · falta ${item.meta.remainingCount ?? '—'} · ${brl(item.meta.remainingValue || 0)}`)
+          : (item.paused ? 'Pausada / congelada' : 'Todo mês'),
+        raw: item,
+      };
+    });
 
-  const balances = (state.debts || []).map((debt) => ({
-    source: 'debt',
-    id: debt.id,
-    name: debt.creditor,
-    detail: debt.note || DEBT_STATUS_LABEL[debt.status] || '',
-    mode: debt.status,
-    value: debt.balance,
-    valueLabel: 'Saldo',
-    monthly: debt.plannedMonthly,
-    nextDue: '',
-    extra: debt.status === DEBT_STATUS.INTEREST
-      ? `Juros/mês ${brl(debt.plannedMonthly || debt.monthlyCost || 0)}`
-      : debt.status === DEBT_STATUS.ATTACK
-        ? `Planejado ${brl(debt.plannedMonthly)} · prioridade ${debt.priority}`
-        : debt.status === DEBT_STATUS.FROZEN
-          ? 'Sem pagamento por enquanto'
-          : DEBT_STATUS_LABEL[debt.status] || '',
-    raw: debt,
-  }));
+  const balances = (state.debts || [])
+    .filter((debt) => {
+      if (debt.status === DEBT_STATUS.PAID || debt.status === DEBT_STATUS.RENEGOTIATED) return false;
+      if (debt.status === DEBT_STATUS.FROZEN) {
+        if (monthKey < currentMonthKey()) {
+          return Boolean(state.months[monthKey]?.entries?.some((entry) => entry.debtId === debt.id));
+        }
+        return true;
+      }
+      if (!(Number(debt.plannedMonthly) > 0 || Number(debt.monthlyCost) > 0)) return false;
+      if (monthKey < currentMonthKey()) {
+        return Boolean(state.months[monthKey]?.entries?.some((entry) => entry.debtId === debt.id));
+      }
+      return true;
+    })
+    .map((debt) => ({
+      source: 'debt',
+      id: debt.id,
+      name: debt.creditor,
+      detail: debt.note || DEBT_STATUS_LABEL[debt.status] || '',
+      mode: debt.status,
+      value: debt.balance,
+      valueLabel: 'Saldo',
+      monthly: debt.plannedMonthly,
+      nextDue: dueDateInMonth(monthKey, 10),
+      extra: debt.status === DEBT_STATUS.INTEREST
+        ? `Juros/mês ${brl(debt.plannedMonthly || debt.monthlyCost || 0)}`
+        : debt.status === DEBT_STATUS.ATTACK
+          ? `Planejado ${brl(debt.plannedMonthly)} · prioridade ${debt.priority}`
+          : debt.status === DEBT_STATUS.FROZEN
+            ? 'Sem pagamento por enquanto'
+            : DEBT_STATUS_LABEL[debt.status] || '',
+      raw: debt,
+    }));
 
   return [...commitments, ...balances].toSorted((a, b) => {
     const order = { attack: 0, interest: 1, parcelada: 2, fixa: 3, frozen: 4, renegotiated: 5, paid: 6 };
@@ -713,7 +748,9 @@ function listUnifiedDebts() {
 }
 
 function renderDebts() {
-  const rows = listUnifiedDebts().filter((row) => {
+  const monthKey = state.currentMonth;
+  const allRows = listUnifiedDebts(monthKey);
+  const rows = allRows.filter((row) => {
     if (debtFilter === 'all') return row.mode !== 'paid';
     if (debtFilter === 'fixa') return row.mode === 'fixa';
     if (debtFilter === 'parcelada') return row.mode === 'parcelada';
@@ -723,17 +760,12 @@ function renderDebts() {
     return true;
   });
 
-  const openBalances = (state.debts || []).filter((d) => d.status !== DEBT_STATUS.PAID);
-  const balanceTotal = openBalances.reduce((sum, d) => sum + Number(d.balance || 0), 0);
-  const parcelRemaining = listCommitments(state)
-    .filter((c) => isInstallment(c) && !c.meta.finished)
-    .reduce((sum, c) => sum + Number(c.meta.remainingValue || 0), 0);
-  const monthlyFixed = listCommitments(state)
-    .filter((c) => !isInstallment(c) && !c.paused && c.status !== 'finished')
-    .reduce((sum, c) => sum + Number(c.amount || 0), 0);
-  const monthlyAttack = openBalances
-    .filter((d) => d.status === DEBT_STATUS.ATTACK || d.status === DEBT_STATUS.INTEREST)
-    .reduce((sum, d) => sum + Number(d.plannedMonthly || 0), 0);
+  const balanceTotal = allRows.filter((r) => r.source === 'debt').reduce((sum, r) => sum + Number(r.value || 0), 0);
+  const parcelMonth = allRows.filter((r) => r.mode === 'parcelada').reduce((sum, r) => sum + Number(r.value || 0), 0);
+  const monthlyFixed = allRows.filter((r) => r.mode === 'fixa').reduce((sum, r) => sum + Number(r.value || 0), 0);
+  const monthlyAttack = allRows
+    .filter((r) => r.mode === 'attack' || r.mode === 'interest')
+    .reduce((sum, r) => sum + Number(r.monthly || r.value || 0), 0);
 
   const filters = [
     ['all', 'Tudo'],
@@ -764,7 +796,7 @@ function renderDebts() {
 
     <section class="grid grid--4 section-gap">
       ${metric('Saldos abertos', balanceTotal, balanceTotal ? 'negative' : '')}
-      ${metric('Parcelas restantes', parcelRemaining, parcelRemaining ? 'negative' : '')}
+      ${metric('Parcelas do mês', parcelMonth, parcelMonth ? 'negative' : '')}
       ${metric('Fixas no mês', monthlyFixed)}
       ${metric('Atacar / juros no mês', monthlyAttack)}
     </section>
@@ -811,7 +843,7 @@ function renderDebts() {
               `}
             </div>
           </div>`).join('')}
-        </div>` : emptyState('◈', 'Nenhuma dívida neste filtro', 'Internet = Conta fixa. Compra em X vezes = Parcelada. Empréstimo/agiota/amigo = Saldo aberto (Atacar, Juros ou Congelada).')}
+        </div>` : emptyState('◈', 'Nada neste mês', `Em ${escapeHtml(monthLabel(monthKey))} não há dívida ativa. Avance para o mês em que as parcelas começam.`)}
     </section>`;
 }
 
