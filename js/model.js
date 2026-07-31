@@ -31,7 +31,28 @@ export const COMMITMENT_TYPES = {
   SUBSCRIPTION: 'subscription',
   FINANCING: 'financing',
   AGREEMENT: 'agreement',
-  DEBT: 'debt',
+};
+
+export const INCOME_CERTAINTY = {
+  RECEIVED: 'received',
+  GUARANTEED: 'guaranteed',
+  FORECAST: 'forecast',
+};
+
+export const DEBT_STATUS = {
+  ATTACK: 'attack',
+  INTEREST: 'interest',
+  FROZEN: 'frozen',
+  PAID: 'paid',
+  RENEGOTIATED: 'renegotiated',
+};
+
+export const DEBT_STATUS_LABEL = {
+  attack: 'Atacar',
+  interest: 'Juros',
+  frozen: 'Congelada',
+  paid: 'Quitada',
+  renegotiated: 'Renegociada',
 };
 
 export const STATUS_LABEL = {
@@ -41,6 +62,9 @@ export const STATUS_LABEL = {
   overdue: 'Atrasado',
   cancelled: 'Cancelado',
   renegotiated: 'Renegociado',
+  active: 'Ativo',
+  paused: 'Pausado',
+  finished: 'Encerrado',
 };
 
 export const TYPE_LABEL = {
@@ -152,7 +176,13 @@ function paidTotal(entry) {
 export function deriveStatus(entry, today = new Date()) {
   if (entry.status === PAY_STATUS.CANCELLED || entry.status === PAY_STATUS.RENEGOTIATED) return entry.status;
   if (entry.type === ENTRY_TYPES.INCOME) {
-    return entry.received || paidTotal(entry) >= toNumber(entry.amount) ? PAY_STATUS.PAID : PAY_STATUS.PENDING;
+    const paid = paidTotal(entry);
+    if (entry.certainty === INCOME_CERTAINTY.RECEIVED || entry.received || paid > 0) {
+      if (paid >= toNumber(entry.amount) - 0.009 || (entry.certainty === INCOME_CERTAINTY.RECEIVED && paid <= 0)) return PAY_STATUS.PAID;
+      if (paid > 0 && paid < toNumber(entry.amount) - 0.009) return PAY_STATUS.PARTIAL;
+      return PAY_STATUS.PAID;
+    }
+    return PAY_STATUS.PENDING;
   }
   const paid = paidTotal(entry);
   const amount = toNumber(entry.amount);
@@ -165,12 +195,34 @@ export function deriveStatus(entry, today = new Date()) {
   return PAY_STATUS.PENDING;
 }
 
+function incomeReceivedAmount(entry) {
+  if (entry.type !== ENTRY_TYPES.INCOME) return 0;
+  const paid = paidTotal(entry);
+  if (paid > 0) return paid;
+  if (entry.certainty === INCOME_CERTAINTY.RECEIVED || entry.received) return toNumber(entry.amount);
+  return 0;
+}
+
+function incomeCountsAsGuaranteed(entry) {
+  if (entry.type !== ENTRY_TYPES.INCOME) return false;
+  if (entry.isDaily) return false;
+  if (entry.certainty === INCOME_CERTAINTY.RECEIVED || entry.received) return true;
+  if (entry.certainty === INCOME_CERTAINTY.GUARANTEED) return true;
+  return false;
+}
+
 function normalizeEntry(item = {}) {
   const type = Object.values(ENTRY_TYPES).includes(item.type) ? item.type : ENTRY_TYPES.BILL;
   const payments = Array.isArray(item.payments) ? item.payments.map(normalizePayment) : [];
+  let certainty = item.certainty;
+  if (!Object.values(INCOME_CERTAINTY).includes(certainty)) {
+    if (item.received || paidTotal({ payments }) > 0) certainty = INCOME_CERTAINTY.RECEIVED;
+    else certainty = INCOME_CERTAINTY.FORECAST;
+  }
   const entry = {
     id: item.id || makeId('entry'),
     commitmentId: item.commitmentId || null,
+    debtId: item.debtId || null,
     type,
     name: String(item.name || TYPE_LABEL[type] || 'Item'),
     amount: Math.max(0, toNumber(item.amount)),
@@ -179,39 +231,55 @@ function normalizeEntry(item = {}) {
     note: String(item.note || ''),
     installmentNumber: item.installmentNumber != null ? Math.max(1, Math.round(toNumber(item.installmentNumber, 1))) : null,
     totalInstallments: item.totalInstallments != null ? Math.max(1, Math.round(toNumber(item.totalInstallments, 1))) : null,
-    received: Boolean(item.received),
+    received: Boolean(item.received) || certainty === INCOME_CERTAINTY.RECEIVED,
+    certainty: type === ENTRY_TYPES.INCOME ? certainty : null,
     isDaily: Boolean(item.isDaily) || String(item.category || '').toLowerCase() === 'diária' || String(item.category || '').toLowerCase() === 'diaria',
-    quantity: Math.max(0, toNumber(item.quantity, item.isDaily ? 1 : 1)),
+    quantity: Math.max(0, toNumber(item.quantity, item.isDaily ? 1 : 0)),
     payments,
     status: item.status || PAY_STATUS.PENDING,
     needsInfo: Boolean(item.needsInfo),
     direction: type === ENTRY_TYPES.INCOME ? 'in' : 'out',
   };
-  if (type === ENTRY_TYPES.INCOME && entry.received && !payments.length) {
-    entry.payments = [normalizePayment({ amount: entry.amount, date: entry.dueDate || toISODate(new Date()), method: 'Recebido', note: 'Migrado' })];
+  if (type === ENTRY_TYPES.INCOME && entry.certainty === INCOME_CERTAINTY.RECEIVED && !payments.length) {
+    entry.payments = [normalizePayment({ amount: entry.amount, date: entry.dueDate || toISODate(new Date()), method: 'Recebido', note: '' })];
+    entry.received = true;
   }
   entry.status = deriveStatus(entry);
-  entry.paidAmount = paidTotal(entry);
-  entry.pendingAmount = Math.max(0, entry.amount - entry.paidAmount);
+  entry.paidAmount = type === ENTRY_TYPES.INCOME ? incomeReceivedAmount(entry) : paidTotal(entry);
+  entry.pendingAmount = Math.max(0, entry.amount - (type === ENTRY_TYPES.INCOME ? entry.paidAmount : paidTotal(entry)));
   return entry;
 }
 
 export function installmentMeta(commitment) {
   const total = Math.max(1, toNumber(commitment.totalInstallments, 1));
-  const current = Math.min(total, Math.max(1, toNumber(commitment.currentInstallment, 1)));
+  let current = Math.max(1, toNumber(commitment.currentInstallment, 1));
+  const finished = commitment.status === 'finished' || current > total;
+  if (finished) {
+    return {
+      total,
+      current: total + 1,
+      value: Math.max(0, toNumber(commitment.installmentValue || commitment.amount)),
+      remainingCount: 0,
+      remainingValue: 0,
+      endDate: commitment.endDate || commitment.nextDueDate || '',
+      endMonth: (commitment.endDate || commitment.nextDueDate || '').slice(0, 7) || null,
+      finished: true,
+    };
+  }
+  current = Math.min(total, current);
   const value = Math.max(0, toNumber(commitment.installmentValue || commitment.amount));
-  const remainingCount = Math.max(0, total - current + (commitment.lastPaidFully ? 0 : 1));
-  const remainingValue = Math.max(0, (total - current + 1) * value);
+  const remainingCount = Math.max(0, total - current + 1);
   const nextDue = commitment.nextDueDate || '';
-  const endDate = nextDue ? addCalendarMonths(nextDue, Math.max(0, total - current)) : '';
+  const endDate = nextDue ? addCalendarMonths(nextDue, Math.max(0, remainingCount - 1)) : '';
   return {
     total,
     current,
     value,
-    remainingCount: Math.max(0, total - current + 1),
-    remainingValue: Math.max(0, (total - current + 1) * value),
+    remainingCount,
+    remainingValue: remainingCount * value,
     endDate,
     endMonth: endDate ? monthKeyFromDate(parseDate(endDate)) : null,
+    finished: false,
   };
 }
 
@@ -234,11 +302,31 @@ function normalizeCommitment(item = {}) {
     paused: Boolean(item.paused),
     needsInfo: Boolean(item.needsInfo),
     status: item.status || 'active',
+    paymentLog: Array.isArray(item.paymentLog) ? item.paymentLog : [],
   };
   if (type === COMMITMENT_TYPES.INSTALLMENT || type === COMMITMENT_TYPES.FINANCING || type === COMMITMENT_TYPES.AGREEMENT) {
     if (!commitment.totalInstallments || !commitment.currentInstallment) commitment.needsInfo = true;
+    if (commitment.currentInstallment > commitment.totalInstallments) commitment.status = 'finished';
   }
   return commitment;
+}
+
+function normalizeDebt(item = {}) {
+  const status = Object.values(DEBT_STATUS).includes(item.status) ? item.status : DEBT_STATUS.ATTACK;
+  const balance = Math.max(0, toNumber(item.balance ?? item.amount));
+  const paidTotalAmount = Math.max(0, toNumber(item.paidTotal));
+  return {
+    id: item.id || makeId('debt'),
+    creditor: String(item.creditor || item.name || 'Credor'),
+    balance,
+    plannedMonthly: Math.max(0, toNumber(item.plannedMonthly ?? item.plannedPayment)),
+    monthlyCost: Math.max(0, toNumber(item.monthlyCost ?? item.interest)),
+    priority: Math.max(1, Math.round(toNumber(item.priority, 3))),
+    status,
+    note: String(item.note || ''),
+    paidTotal: paidTotalAmount,
+    remaining: Math.max(0, balance),
+  };
 }
 
 function emptyMonth() {
@@ -254,177 +342,28 @@ function emptyMonth() {
 
 export function createEmptyState(monthKey = currentMonthKey()) {
   return {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     currentMonth: monthKey,
     settings: { ...DEFAULT_SETTINGS },
     commitments: [],
+    debts: [],
     months: { [monthKey]: emptyMonth() },
   };
 }
 
-function migrateLegacyMonth(monthKey, month, commitments) {
-  const entries = [];
-  for (const income of month.incomes || []) {
-    const amount = toNumber(income.unitValue) * toNumber(income.quantity, 1);
-    entries.push(normalizeEntry({
-      id: income.id,
-      type: ENTRY_TYPES.INCOME,
-      name: income.source || 'Receita',
-      amount,
-      category: income.kind === 'daily' ? 'Diária' : income.kind === 'salary' ? 'Salário' : 'Extra',
-      dueDate: dueDateInMonth(monthKey, 1),
-      note: income.note || '',
-      received: Boolean(income.received),
-    }));
-    if (income.recurring !== false) {
-      const exists = commitments.find((item) => item.name === (income.source || 'Receita') && item.type === COMMITMENT_TYPES.RECURRING && item.category === 'Receita');
-      if (!exists) {
-        commitments.push(normalizeCommitment({
-          type: COMMITMENT_TYPES.RECURRING,
-          name: income.source || 'Receita',
-          amount,
-          category: 'Receita',
-          dueDay: 1,
-          startDate: `${monthKey}-01`,
-          note: 'Migrado de receita recorrente',
-        }));
-      }
-    }
-  }
-
-  for (const bill of month.bills || []) {
-    const looksParcel = /parcela|x\s*\d|\d+\s*\/\s*\d+/i.test(`${bill.name} ${bill.note || ''}`);
-    const needsInfo = looksParcel;
-    let commitmentId = null;
-    if (bill.recurring !== false || looksParcel) {
-      const commitment = normalizeCommitment({
-        type: looksParcel ? COMMITMENT_TYPES.INSTALLMENT : COMMITMENT_TYPES.RECURRING,
-        name: bill.name,
-        amount: bill.amount,
-        installmentValue: bill.amount,
-        category: bill.category || 'Geral',
-        dueDay: bill.dueDay || 1,
-        startDate: `${monthKey}-01`,
-        note: bill.note || '',
-        needsInfo,
-        totalInstallments: null,
-        currentInstallment: null,
-        nextDueDate: dueDateInMonth(monthKey, bill.dueDay || 1),
-      });
-      commitments.push(commitment);
-      commitmentId = commitment.id;
-    }
-    entries.push(normalizeEntry({
-      id: bill.id,
-      commitmentId,
-      type: looksParcel ? ENTRY_TYPES.INSTALLMENT : ENTRY_TYPES.BILL,
-      name: bill.name,
-      amount: bill.amount,
-      category: bill.category || 'Geral',
-      dueDate: dueDateInMonth(monthKey, bill.dueDay || 1),
-      note: bill.note || '',
-      needsInfo,
-      payments: bill.paid ? [{ amount: bill.amount, date: dueDateInMonth(monthKey, bill.dueDay || 1), method: 'Migrado' }] : [],
-      status: bill.paid ? PAY_STATUS.PAID : PAY_STATUS.PENDING,
-    }));
-  }
-
-  for (const debt of month.debts || []) {
-    const commitment = normalizeCommitment({
-      type: COMMITMENT_TYPES.DEBT,
-      name: debt.creditor || 'Dívida',
-      amount: debt.balance,
-      category: 'Dívida',
-      note: debt.note || '',
-      dueDay: 1,
-      startDate: `${monthKey}-01`,
-      nextDueDate: dueDateInMonth(monthKey, 1),
-      status: debt.status === 'QUITADA' ? 'finished' : debt.status === 'CONGELADA' ? 'paused' : 'active',
-    });
-    commitments.push(commitment);
-    const pay = toNumber(debt.paidThisMonth);
-    entries.push(normalizeEntry({
-      id: debt.id,
-      commitmentId: commitment.id,
-      type: ENTRY_TYPES.DEBT,
-      name: debt.creditor || 'Dívida',
-      amount: toNumber(debt.plannedPayment) || toNumber(debt.monthlyCost) || toNumber(debt.balance),
-      category: 'Dívida',
-      dueDate: dueDateInMonth(monthKey, 1),
-      note: debt.note || '',
-      payments: pay > 0 ? [{ amount: pay, date: dueDateInMonth(monthKey, 1), method: 'Migrado' }] : [],
-    }));
-  }
-
-  for (const envelope of month.envelopes || []) {
-    if (toNumber(envelope.spent) > 0) {
-      entries.push(normalizeEntry({
-        id: envelope.id,
-        type: ENTRY_TYPES.EXPENSE,
-        name: envelope.name || 'Gasto',
-        amount: envelope.spent,
-        category: 'Envelope',
-        dueDate: dueDateInMonth(monthKey, 28),
-        payments: [{ amount: envelope.spent, date: dueDateInMonth(monthKey, 28), method: 'Migrado' }],
-        status: PAY_STATUS.PAID,
-      }));
-    }
-  }
-
-  return {
-    entries,
-    closed: Boolean(month.closed),
-    closedAt: month.closedAt || null,
-    snapshot: month.snapshot || null,
-    notes: String(month.notes || ''),
-  };
-}
-
-function migrateState(input) {
-  if (input?.version >= 2 && Array.isArray(input.commitments)) {
-    return input;
-  }
-  const base = createEmptyState(input?.currentMonth || currentMonthKey());
-  base.createdAt = input?.createdAt || base.createdAt;
-  base.settings = {
-    ...DEFAULT_SETTINGS,
-    safetyMargin: toNumber(input?.settings?.minimumBuffer ?? input?.settings?.safetyMargin, 300),
-    dailyNetValue: toNumber(input?.settings?.dailyNetValue, 0),
-    saveGoal: toNumber(input?.settings?.saveGoal, 0),
-    frozenDebtFund: toNumber(input?.settings?.frozenDebtFund, 0),
-    lockAfterMinutes: toNumber(input?.settings?.lockAfterMinutes, 15),
-    ownerName: String(input?.settings?.ownerName || ''),
-  };
-  base.currentMonth = input?.currentMonth || base.currentMonth;
-  const commitments = [];
-  const months = {};
-  for (const [key, month] of Object.entries(input?.months || {})) {
-    if (Array.isArray(month?.entries)) {
-      months[key] = {
-        entries: month.entries.map(normalizeEntry),
-        closed: Boolean(month.closed),
-        closedAt: month.closedAt || null,
-        snapshot: month.snapshot || null,
-        notes: String(month.notes || ''),
-      };
-    } else {
-      months[key] = migrateLegacyMonth(key, month || {}, commitments);
-    }
-  }
-  if (!Object.keys(months).length) months[base.currentMonth] = emptyMonth();
-  base.months = months;
-  base.commitments = (input?.commitments || commitments).map(normalizeCommitment);
-  base.version = 2;
-  return base;
+function cloneState(state) {
+  return structuredClone(state);
 }
 
 export function normalizeState(input) {
   const previousUpdatedAt = input && typeof input === 'object' ? input.updatedAt : null;
-  const migrated = migrateState(input && typeof input === 'object' ? structuredClone(input) : null);
-  const state = migrated;
-  state.version = 2;
+  const raw = input && typeof input === 'object' ? structuredClone(input) : createEmptyState();
+  const state = raw.version >= 2 ? raw : createEmptyState(raw.currentMonth);
+
+  // Drop legacy v1-only shapes; keep entries/commitments if present.
+  state.version = 3;
   state.createdAt = state.createdAt || new Date().toISOString();
   state.updatedAt = previousUpdatedAt || state.updatedAt || state.createdAt;
   state.settings = { ...DEFAULT_SETTINGS, ...(state.settings || {}) };
@@ -434,11 +373,31 @@ export function normalizeState(input) {
   state.settings.frozenDebtFund = Math.max(0, toNumber(state.settings.frozenDebtFund, 0));
   state.settings.lockAfterMinutes = Math.max(0, toNumber(state.settings.lockAfterMinutes, 15));
   state.settings.ownerName = String(state.settings.ownerName || '');
-  state.commitments = Array.isArray(state.commitments) ? state.commitments.map(normalizeCommitment) : [];
+
+  let debts = Array.isArray(state.debts) ? state.debts.map(normalizeDebt) : [];
+  const commitments = [];
+  for (const item of Array.isArray(state.commitments) ? state.commitments : []) {
+    if (item.type === 'debt') {
+      debts.push(normalizeDebt({
+        id: item.id,
+        creditor: item.name,
+        balance: item.amount,
+        plannedMonthly: item.amount,
+        note: item.note,
+        status: item.status === 'finished' ? DEBT_STATUS.PAID : item.status === 'paused' ? DEBT_STATUS.FROZEN : DEBT_STATUS.ATTACK,
+      }));
+      continue;
+    }
+    commitments.push(normalizeCommitment(item));
+  }
+  state.commitments = commitments;
+  state.debts = debts;
+
   state.months = state.months && typeof state.months === 'object' ? state.months : {};
   for (const [key, month] of Object.entries(state.months)) {
+    const entries = Array.isArray(month.entries) ? month.entries.map(normalizeEntry) : [];
     state.months[key] = {
-      entries: Array.isArray(month.entries) ? month.entries.map(normalizeEntry) : [],
+      entries,
       skippedCommitmentIds: Array.isArray(month.skippedCommitmentIds) ? month.skippedCommitmentIds.map(String) : [],
       closed: Boolean(month.closed),
       closedAt: month.closedAt || null,
@@ -461,8 +420,10 @@ function commitmentActiveInMonth(commitment, monthKey) {
   if ([COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(commitment.type)) {
     if (commitment.needsInfo || !commitment.totalInstallments || !commitment.currentInstallment || !commitment.nextDueDate) return false;
     const meta = installmentMeta(commitment);
+    if (meta.finished || meta.remainingCount <= 0) return false;
     if (!meta.endMonth) return false;
-    return monthKey <= meta.endMonth && monthKey >= (commitment.nextDueDate.slice(0, 7) || monthKey);
+    const startKey = commitment.nextDueDate.slice(0, 7);
+    return monthKey >= startKey && monthKey <= meta.endMonth;
   }
   return true;
 }
@@ -476,14 +437,8 @@ function installmentNumberForMonth(commitment, monthKey) {
   return (commitment.currentInstallment || 1) + diff;
 }
 
-export function ensureMonth(state, monthKey) {
-  if (!state.months[monthKey]) state.months[monthKey] = emptyMonth();
-  materializeCommitments(state, monthKey);
-  return state.months[monthKey];
-}
-
 function buildEntryFromCommitment(commitment, monthKey) {
-  if (commitment.type === COMMITMENT_TYPES.RECURRING && commitment.category === 'Receita') {
+  if (commitment.category === 'Receita' && commitment.type === COMMITMENT_TYPES.RECURRING) {
     return normalizeEntry({
       commitmentId: commitment.id,
       type: ENTRY_TYPES.INCOME,
@@ -492,6 +447,7 @@ function buildEntryFromCommitment(commitment, monthKey) {
       category: commitment.category,
       dueDate: dueDateInMonth(monthKey, commitment.dueDay || 1),
       note: commitment.note,
+      certainty: INCOME_CERTAINTY.FORECAST,
       isDaily: false,
     });
   }
@@ -513,7 +469,7 @@ function buildEntryFromCommitment(commitment, monthKey) {
   }
   return normalizeEntry({
     commitmentId: commitment.id,
-    type: commitment.type === COMMITMENT_TYPES.DEBT ? ENTRY_TYPES.DEBT : ENTRY_TYPES.BILL,
+    type: ENTRY_TYPES.BILL,
     name: commitment.name,
     amount: commitment.amount,
     category: commitment.category,
@@ -522,27 +478,62 @@ function buildEntryFromCommitment(commitment, monthKey) {
   });
 }
 
+function buildDebtEntry(debt, monthKey) {
+  if (debt.status === DEBT_STATUS.PAID || debt.status === DEBT_STATUS.RENEGOTIATED) return null;
+  if (debt.status === DEBT_STATUS.FROZEN) return null;
+  const amount = toNumber(debt.plannedMonthly);
+  if (amount <= 0) return null;
+  return normalizeEntry({
+    debtId: debt.id,
+    type: ENTRY_TYPES.DEBT,
+    name: debt.creditor,
+    amount,
+    category: 'Dívida',
+    dueDate: dueDateInMonth(monthKey, 10),
+    note: debt.note,
+  });
+}
+
 export function materializeCommitments(state, monthKey) {
   const month = state.months[monthKey];
   if (!month) return;
   if (!Array.isArray(month.skippedCommitmentIds)) month.skippedCommitmentIds = [];
-  const existing = new Set(month.entries.filter((item) => item.commitmentId).map((item) => item.commitmentId));
+  const existingCommit = new Set(month.entries.filter((item) => item.commitmentId).map((item) => item.commitmentId));
   for (const commitment of state.commitments) {
     if (!commitmentActiveInMonth(commitment, monthKey)) continue;
     if (month.skippedCommitmentIds.includes(commitment.id)) continue;
-    if (existing.has(commitment.id)) continue;
+    if (existingCommit.has(commitment.id)) continue;
     const entry = buildEntryFromCommitment(commitment, monthKey);
+    if (entry) month.entries.push(entry);
+  }
+  const existingDebt = new Set(month.entries.filter((item) => item.debtId).map((item) => item.debtId));
+  for (const debt of state.debts || []) {
+    if (existingDebt.has(debt.id)) continue;
+    if (month.skippedCommitmentIds.includes(debt.id)) continue;
+    const entry = buildDebtEntry(debt, monthKey);
     if (entry) month.entries.push(entry);
   }
 }
 
-export function monthEntries(state, monthKey = state.currentMonth, filter = 'all') {
-  ensureMonth(state, monthKey);
-  const entries = state.months[monthKey].entries.map((item) => {
+export function ensureMonth(state, monthKey) {
+  if (!state.months[monthKey]) state.months[monthKey] = emptyMonth();
+  materializeCommitments(state, monthKey);
+  return state.months[monthKey];
+}
+
+function peekMonthEntries(state, monthKey) {
+  const month = state.months[monthKey];
+  if (!month) return [];
+  return month.entries.map((item) => {
     const entry = normalizeEntry(item);
     entry.status = deriveStatus(entry);
     return entry;
   });
+}
+
+export function monthEntries(state, monthKey = state.currentMonth, filter = 'all') {
+  ensureMonth(state, monthKey);
+  const entries = peekMonthEntries(state, monthKey);
   return entries.filter((entry) => {
     if (filter === 'all') return true;
     if (filter === 'pending') return entry.status === PAY_STATUS.PENDING || entry.status === PAY_STATUS.PARTIAL;
@@ -554,44 +545,95 @@ export function monthEntries(state, monthKey = state.currentMonth, filter = 'all
   }).toSorted((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)) || a.name.localeCompare(b.name));
 }
 
+function reserveSeparated(entries) {
+  return entries
+    .filter((item) => item.type === ENTRY_TYPES.RESERVE && item.status !== PAY_STATUS.CANCELLED)
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+}
+
+function reserveRemaining(state, entries) {
+  const goal = toNumber(state.settings.saveGoal);
+  return Math.max(0, goal - reserveSeparated(entries));
+}
+
+function frozenFundSeparated(entries) {
+  return entries
+    .filter((item) => item.type === ENTRY_TYPES.RESERVE && /congelad/i.test(`${item.name} ${item.category} ${item.note}`))
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+}
+
+function frozenFundRemaining(state, entries) {
+  const goal = toNumber(state.settings.frozenDebtFund);
+  const separated = frozenFundSeparated(entries);
+  // If no dedicated frozen reserve entries, treat general remaining of frozen goal.
+  if (separated <= 0 && goal > 0) {
+    // Use tagged reserves first; otherwise remaining is full goal minus any "fundo" reserves already counted in reserveSeparated with tag
+    return goal;
+  }
+  return Math.max(0, goal - separated);
+}
+
+function remainingSaveAndFrozen(state, entries) {
+  const saveGoal = toNumber(state.settings.saveGoal);
+  const frozenGoal = toNumber(state.settings.frozenDebtFund);
+  const allReservePaid = reserveSeparated(entries);
+  const taggedFrozen = frozenFundSeparated(entries);
+  const savePaid = Math.max(0, allReservePaid - taggedFrozen);
+  const remainingSave = Math.max(0, saveGoal - savePaid);
+  const remainingFrozen = Math.max(0, frozenGoal - taggedFrozen);
+  return { remainingSave, remainingFrozen, savePaid, taggedFrozen, allReservePaid };
+}
+
 export function overview(state, monthKey = state.currentMonth) {
   const entries = monthEntries(state, monthKey, 'all');
-  const received = entries.filter((item) => item.type === ENTRY_TYPES.INCOME && item.status === PAY_STATUS.PAID);
-  const outs = entries.filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status !== PAY_STATUS.CANCELLED);
-  const available = received.reduce((sum, item) => sum + item.amount, 0);
-  const billLike = outs.filter((item) => item.type !== ENTRY_TYPES.RESERVE);
-  const reserves = outs.filter((item) => item.type === ENTRY_TYPES.RESERVE);
-  const totalBills = billLike.reduce((sum, item) => sum + item.amount, 0);
-  const totalPaid = billLike.reduce((sum, item) => sum + item.paidAmount, 0);
-  const totalPending = billLike.reduce((sum, item) => sum + item.pendingAmount, 0);
-  const overdue = billLike.filter((item) => item.status === PAY_STATUS.OVERDUE);
-  const reserved = reserves.reduce((sum, item) => sum + item.amount, 0);
+  const incomes = entries.filter((item) => item.type === ENTRY_TYPES.INCOME);
+  const receivedTotal = incomes.reduce((sum, item) => sum + incomeReceivedAmount(item), 0);
+
+  const paymentsMade = entries
+    .filter((item) => [ENTRY_TYPES.BILL, ENTRY_TYPES.INSTALLMENT, ENTRY_TYPES.DEBT].includes(item.type))
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+  const expensesMade = entries
+    .filter((item) => item.type === ENTRY_TYPES.EXPENSE)
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+  const reservesMade = reserveSeparated(entries);
+
+  const currentBalance = receivedTotal - paymentsMade - expensesMade - reservesMade;
+
+  const pendingOut = entries.filter((item) =>
+    [ENTRY_TYPES.BILL, ENTRY_TYPES.INSTALLMENT, ENTRY_TYPES.DEBT].includes(item.type)
+    && item.status !== PAY_STATUS.CANCELLED
+    && item.status !== PAY_STATUS.PAID);
+  const totalPending = pendingOut.reduce((sum, item) => sum + item.pendingAmount, 0);
+  const { remainingSave } = remainingSaveAndFrozen(state, entries);
   const safety = toNumber(state.settings.safetyMargin);
-  const free = available - totalPending - reserved - safety;
-  const upcoming = billLike
-    .filter((item) => item.status === PAY_STATUS.PENDING || item.status === PAY_STATUS.PARTIAL || item.status === PAY_STATUS.OVERDUE)
-    .slice(0, 6);
+  const free = currentBalance - totalPending - remainingSave - safety;
+
+  const overdue = pendingOut.filter((item) => item.status === PAY_STATUS.OVERDUE);
+  const upcoming = pendingOut.slice(0, 6);
   const endingSoon = state.commitments
     .filter((item) => [COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(item.type))
     .map((item) => ({ commitment: item, meta: installmentMeta(item) }))
-    .filter((item) => item.meta.remainingCount > 0 && item.meta.remainingCount <= 3)
+    .filter((item) => !item.meta.finished && item.meta.remainingCount > 0 && item.meta.remainingCount <= 3)
     .slice(0, 6);
 
   return {
-    available,
-    receivedTotal: available,
-    totalBills,
-    totalPaid,
+    currentBalance,
+    available: currentBalance,
+    receivedTotal,
+    totalBills: pendingOut.reduce((sum, item) => sum + item.amount, 0),
+    totalPaid: paymentsMade + expensesMade,
     totalPending,
     overdueCount: overdue.length,
     overdueTotal: overdue.reduce((sum, item) => sum + item.pendingAmount, 0),
-    reserved,
+    reserved: reservesMade,
+    remainingSave,
     safety,
     free,
     upcoming,
     endingSoon,
     overdue,
     daily: dailyPlan(state, monthKey),
+    debtsSummary: debtsSummary(state, monthKey),
   };
 }
 
@@ -602,21 +644,23 @@ function ceilDiv(value, divisor) {
 
 export function dailyPlan(state, monthKey = state.currentMonth) {
   const entries = monthEntries(state, monthKey, 'all');
-  const settings = state.settings;
-  const dailyNet = toNumber(settings.dailyNetValue);
+  const dailyNet = toNumber(state.settings.dailyNetValue);
+  const safety = toNumber(state.settings.safetyMargin);
+  const { remainingSave, remainingFrozen } = remainingSaveAndFrozen(state, entries);
+
   const pendingBills = entries
-    .filter((item) => item.type !== ENTRY_TYPES.INCOME && item.type !== ENTRY_TYPES.RESERVE && item.type !== ENTRY_TYPES.DEBT && item.status !== PAY_STATUS.CANCELLED && item.status !== PAY_STATUS.PAID)
+    .filter((item) => [ENTRY_TYPES.BILL, ENTRY_TYPES.EXPENSE].includes(item.type) && item.status !== PAY_STATUS.CANCELLED && item.status !== PAY_STATUS.PAID)
+    .reduce((sum, item) => sum + item.pendingAmount, 0);
+  const pendingInstallments = entries
+    .filter((item) => item.type === ENTRY_TYPES.INSTALLMENT && item.status !== PAY_STATUS.CANCELLED && item.status !== PAY_STATUS.PAID)
     .reduce((sum, item) => sum + item.pendingAmount, 0);
   const plannedDebts = entries
-    .filter((item) => item.type === ENTRY_TYPES.DEBT && item.status !== PAY_STATUS.CANCELLED)
+    .filter((item) => item.type === ENTRY_TYPES.DEBT && item.status !== PAY_STATUS.CANCELLED && item.status !== PAY_STATUS.PAID)
     .reduce((sum, item) => sum + item.pendingAmount, 0);
-  const safety = toNumber(settings.safetyMargin);
-  const saveGoal = toNumber(settings.saveGoal);
-  const frozenFund = toNumber(settings.frozenDebtFund);
 
-  const otherGuaranteed = entries
-    .filter((item) => item.type === ENTRY_TYPES.INCOME && !item.isDaily)
-    .reduce((sum, item) => sum + (item.status === PAY_STATUS.PAID || item.received ? item.amount : item.amount), 0);
+  const guaranteedOther = entries
+    .filter((item) => incomeCountsAsGuaranteed(item))
+    .reduce((sum, item) => sum + (incomeReceivedAmount(item) || (item.certainty === INCOME_CERTAINTY.GUARANTEED ? item.amount : 0)), 0);
 
   const dailyIncomes = entries.filter((item) => item.type === ENTRY_TYPES.INCOME && item.isDaily);
   const plannedDailies = dailyIncomes.reduce((sum, item) => {
@@ -624,56 +668,89 @@ export function dailyPlan(state, monthKey = state.currentMonth) {
     return sum + (dailyNet > 0 ? item.amount / dailyNet : 0);
   }, 0);
 
-  const forBills = pendingBills;
-  const forSafety = pendingBills + safety;
-  const forSave = pendingBills + safety + saveGoal;
-  const forFrozen = pendingBills + safety + saveGoal + frozenFund;
-  const monthlyGoal = pendingBills + safety + saveGoal + frozenFund + plannedDebts;
-
-  const need = (goal) => ceilDiv(Math.max(0, goal - otherGuaranteed), dailyNet);
+  const baseObligations = pendingBills + pendingInstallments + plannedDebts;
+  const monthlyGoal = baseObligations + safety + remainingSave + remainingFrozen;
+  const stillNeeded = Math.max(0, monthlyGoal - guaranteedOther);
+  const need = (goal) => ceilDiv(Math.max(0, goal - guaranteedOther), dailyNet);
+  const needTotal = need(monthlyGoal);
+  const surplus = needTotal != null && dailyNet > 0
+    ? Math.max(0, (plannedDailies * dailyNet + guaranteedOther) - monthlyGoal)
+    : null;
 
   return {
     dailyNet,
-    otherGuaranteed,
-    pendingBills,
+    otherGuaranteed: guaranteedOther,
+    pendingBills: pendingBills + pendingInstallments,
     plannedDebts,
     safety,
-    saveGoal,
-    frozenFund,
+    saveGoal: remainingSave,
+    frozenFund: remainingFrozen,
     monthlyGoal,
+    stillNeeded,
     plannedDailies: Math.round(plannedDailies * 100) / 100,
-    needForBills: need(forBills),
-    needForSafety: need(forSafety),
-    needForSave: need(forSave),
-    needForFrozen: need(forFrozen),
-    needForGoal: need(monthlyGoal),
-    missing: need(monthlyGoal) == null ? null : Math.max(0, need(monthlyGoal) - plannedDailies),
+    needForBills: need(pendingBills + pendingInstallments),
+    needForSafety: need(pendingBills + pendingInstallments + plannedDebts + safety),
+    needForSave: need(pendingBills + pendingInstallments + plannedDebts + safety + remainingSave),
+    needForFrozen: need(monthlyGoal),
+    needForGoal: needTotal,
+    missing: needTotal == null ? null : Math.max(0, needTotal - plannedDailies),
+    surplus,
   };
 }
 
+function projectedEntriesForMonth(state, monthKey) {
+  const existing = state.months[monthKey] ? peekMonthEntries(state, monthKey) : [];
+  const byCommit = new Map(existing.filter((e) => e.commitmentId).map((e) => [e.commitmentId, e]));
+  const byDebt = new Map(existing.filter((e) => e.debtId).map((e) => [e.debtId, e]));
+  const skipped = new Set(state.months[monthKey]?.skippedCommitmentIds || []);
+  const list = existing.filter((e) => !e.commitmentId && !e.debtId);
+
+  for (const commitment of state.commitments) {
+    if (skipped.has(commitment.id)) continue;
+    if (!commitmentActiveInMonth(commitment, monthKey)) continue;
+    if (byCommit.has(commitment.id)) {
+      list.push(byCommit.get(commitment.id));
+      continue;
+    }
+    const built = buildEntryFromCommitment(commitment, monthKey);
+    if (built) list.push(built);
+  }
+  for (const debt of state.debts || []) {
+    if (skipped.has(debt.id)) continue;
+    if (byDebt.has(debt.id)) {
+      list.push(byDebt.get(debt.id));
+      continue;
+    }
+    const built = buildDebtEntry(debt, monthKey);
+    if (built) list.push(built);
+  }
+  return list;
+}
+
 export function projection(state, startMonth = state.currentMonth, length = 12) {
+  const temp = cloneState(state);
   const rows = [];
-  const saveGoal = toNumber(state.settings.saveGoal);
-  const frozenFund = toNumber(state.settings.frozenDebtFund);
-  const safety = toNumber(state.settings.safetyMargin);
+  const safety = toNumber(temp.settings.safetyMargin);
 
   for (let index = 0; index < length; index += 1) {
     const monthKey = addMonths(startMonth, index);
-    ensureMonth(state, monthKey);
-    const entries = monthEntries(state, monthKey, 'all');
+    const entries = projectedEntriesForMonth(temp, monthKey);
     const income = entries.filter((item) => item.type === ENTRY_TYPES.INCOME).reduce((sum, item) => sum + item.amount, 0);
     const outItems = entries.filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status !== PAY_STATUS.CANCELLED);
-    const out = outItems.reduce((sum, item) => sum + item.amount, 0);
-    const debtEntries = outItems.filter((item) => item.type === ENTRY_TYPES.DEBT).reduce((sum, item) => sum + item.amount, 0);
-    const reserveEntries = outItems.filter((item) => item.type === ENTRY_TYPES.RESERVE).reduce((sum, item) => sum + item.amount, 0);
-    const toDebts = debtEntries + frozenFund;
-    const toReserve = reserveEntries + saveGoal;
-    const balance = income - out - saveGoal - frozenFund;
-    const available = Math.max(0, balance - safety);
-    const ending = state.commitments
+    const outCore = outItems
+      .filter((item) => item.type !== ENTRY_TYPES.RESERVE)
+      .reduce((sum, item) => sum + item.amount, 0);
+    const debtOut = outItems.filter((item) => item.type === ENTRY_TYPES.DEBT).reduce((sum, item) => sum + item.amount, 0);
+    const { remainingSave, remainingFrozen } = remainingSaveAndFrozen(temp, entries);
+    const toReserve = remainingSave;
+    const toDebts = debtOut + remainingFrozen;
+    const out = outCore + toReserve + remainingFrozen;
+    const beforeMargin = income - out;
+    const free = beforeMargin - safety;
+    const ending = temp.commitments
       .filter((item) => [COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(item.type))
       .map((item) => ({ item, meta: installmentMeta(item) }))
-      .filter((row) => row.meta.endMonth === monthKey);
+      .filter((row) => !row.meta.finished && row.meta.endMonth === monthKey);
     const released = ending.reduce((sum, row) => sum + row.meta.value, 0);
     rows.push({
       monthKey,
@@ -681,8 +758,9 @@ export function projection(state, startMonth = state.currentMonth, length = 12) 
       out,
       toReserve,
       toDebts,
-      available,
-      balance,
+      beforeMargin,
+      available: Math.max(0, free),
+      balance: free,
       ending: ending.map((row) => row.item.name),
       released,
     });
@@ -704,14 +782,40 @@ export function listCommitments(state) {
           current: null,
           total: null,
           value: commitment.amount,
+          finished: commitment.status === 'finished',
         };
     return {
       ...commitment,
       meta,
       nextDue: commitment.nextDueDate || (commitment.dueDay ? dueDateInMonth(state.currentMonth, commitment.dueDay) : ''),
       typeLabel: TYPE_LABEL[commitment.type] || commitment.type,
+      statusLabel: STATUS_LABEL[commitment.status] || commitment.status,
     };
   }).toSorted((a, b) => String(a.nextDue).localeCompare(String(b.nextDue)) || a.name.localeCompare(b.name));
+}
+
+export function debtsSummary(state, monthKey = state.currentMonth) {
+  const debts = (state.debts || []).map(normalizeDebt);
+  const entries = peekMonthEntries(state, monthKey);
+  const monthDebtPaid = entries
+    .filter((item) => item.type === ENTRY_TYPES.DEBT)
+    .reduce((sum, item) => sum + item.paidAmount, 0);
+  const { taggedFrozen, remainingFrozen } = remainingSaveAndFrozen(state, entries.length ? entries : monthEntries(state, monthKey));
+  const totalBalance = debts.filter((d) => d.status !== DEBT_STATUS.PAID).reduce((sum, d) => sum + d.balance, 0);
+  const totalPaid = debts.reduce((sum, d) => sum + d.paidTotal, 0);
+  const plannedMonth = debts
+    .filter((d) => d.status === DEBT_STATUS.ATTACK || d.status === DEBT_STATUS.INTEREST)
+    .reduce((sum, d) => sum + d.plannedMonthly, 0);
+  return {
+    debts,
+    totalBalance,
+    totalPaid,
+    remaining: totalBalance,
+    plannedMonth,
+    monthDebtPaid,
+    frozenFundAccumulated: taggedFrozen,
+    frozenFundRemaining: remainingFrozen,
+  };
 }
 
 export function deleteEntryScope(state, entryId, monthKey, scope) {
@@ -721,20 +825,19 @@ export function deleteEntryScope(state, entryId, monthKey, scope) {
 
   if (scope === 'one' || !entry.commitmentId) {
     month.entries = month.entries.filter((item) => item.id !== entryId);
-    if (entry.commitmentId) {
-      if (!month.skippedCommitmentIds.includes(entry.commitmentId)) month.skippedCommitmentIds.push(entry.commitmentId);
+    if (entry.commitmentId && !month.skippedCommitmentIds.includes(entry.commitmentId)) {
+      month.skippedCommitmentIds.push(entry.commitmentId);
+    }
+    if (entry.debtId && !month.skippedCommitmentIds.includes(entry.debtId)) {
+      month.skippedCommitmentIds.push(entry.debtId);
     }
     return;
   }
-
   if (scope === 'forward') {
     deleteCommitmentFrom(state, entry.commitmentId, monthKey);
     return;
   }
-
-  if (scope === 'all') {
-    deleteCommitmentAll(state, entry.commitmentId);
-  }
+  deleteCommitmentAll(state, entry.commitmentId);
 }
 
 export function deleteCommitmentScope(state, commitmentId, monthKey, scope) {
@@ -785,17 +888,24 @@ export function history(state) {
     .sort()
     .reverse()
     .map((monthKey) => {
-      const entries = monthEntries(state, monthKey, 'all');
-      const income = entries.filter((item) => item.type === ENTRY_TYPES.INCOME && item.status === PAY_STATUS.PAID).reduce((sum, item) => sum + item.amount, 0);
-      const out = entries.filter((item) => item.type !== ENTRY_TYPES.INCOME).reduce((sum, item) => sum + item.paidAmount, 0);
-      const paidCount = entries.filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status === PAY_STATUS.PAID).length;
-      const overdueCount = entries.filter((item) => item.status === PAY_STATUS.OVERDUE).length;
+      const entries = peekMonthEntries(state, monthKey);
+      const income = entries
+        .filter((item) => item.type === ENTRY_TYPES.INCOME)
+        .reduce((sum, item) => sum + incomeReceivedAmount(item), 0);
+      const payments = entries
+        .filter((item) => [ENTRY_TYPES.BILL, ENTRY_TYPES.INSTALLMENT, ENTRY_TYPES.DEBT].includes(item.type))
+        .reduce((sum, item) => sum + item.paidAmount, 0);
+      const expenses = entries
+        .filter((item) => item.type === ENTRY_TYPES.EXPENSE)
+        .reduce((sum, item) => sum + item.paidAmount, 0);
+      const reserves = reserveSeparated(entries);
+      const out = payments + expenses + reserves;
       return {
         monthKey,
         income,
         out,
-        paidCount,
-        overdueCount,
+        paidCount: entries.filter((item) => item.type !== ENTRY_TYPES.INCOME && item.status === PAY_STATUS.PAID).length,
+        overdueCount: entries.filter((item) => item.status === PAY_STATUS.OVERDUE).length,
         balance: income - out,
       };
     });
@@ -805,16 +915,35 @@ export function registerPayment(entry, { amount, date, method, note }) {
   const payAmount = Math.max(0, toNumber(amount));
   if (payAmount <= 0) return entry;
   entry.payments = [...(entry.payments || []), normalizePayment({ amount: payAmount, date, method, note })];
-  if (entry.type === ENTRY_TYPES.INCOME) entry.received = paidTotal(entry) >= entry.amount;
+  if (entry.type === ENTRY_TYPES.INCOME) {
+    entry.received = paidTotal(entry) >= entry.amount - 0.009;
+    entry.certainty = entry.received ? INCOME_CERTAINTY.RECEIVED : entry.certainty;
+  }
   entry.status = deriveStatus(entry);
-  entry.paidAmount = paidTotal(entry);
-  entry.pendingAmount = Math.max(0, entry.amount - entry.paidAmount);
+  entry.paidAmount = entry.type === ENTRY_TYPES.INCOME ? incomeReceivedAmount(entry) : paidTotal(entry);
+  entry.pendingAmount = Math.max(0, entry.amount - paidTotal(entry));
+  return entry;
+}
+
+export function undoLastPayment(entry) {
+  if (!(entry.payments || []).length) return entry;
+  entry.payments = entry.payments.slice(0, -1);
+  if (entry.type === ENTRY_TYPES.INCOME) {
+    entry.received = paidTotal(entry) >= entry.amount - 0.009;
+    if (!entry.received && entry.certainty === INCOME_CERTAINTY.RECEIVED) entry.certainty = INCOME_CERTAINTY.FORECAST;
+  }
+  entry.status = deriveStatus(entry);
+  entry.paidAmount = entry.type === ENTRY_TYPES.INCOME ? incomeReceivedAmount(entry) : paidTotal(entry);
+  entry.pendingAmount = Math.max(0, entry.amount - paidTotal(entry));
   return entry;
 }
 
 export function undoPayment(entry) {
   entry.payments = [];
   entry.received = false;
+  if (entry.type === ENTRY_TYPES.INCOME && entry.certainty === INCOME_CERTAINTY.RECEIVED) {
+    entry.certainty = INCOME_CERTAINTY.FORECAST;
+  }
   if (entry.status !== PAY_STATUS.CANCELLED && entry.status !== PAY_STATUS.RENEGOTIATED) entry.status = PAY_STATUS.PENDING;
   entry.status = deriveStatus(entry);
   entry.paidAmount = 0;
@@ -829,14 +958,82 @@ export function markPaid(entry, date = toISODate(new Date())) {
 }
 
 export function advanceInstallmentCommitment(commitment, paidCount = 1) {
-  if (!commitment.currentInstallment || !commitment.totalInstallments) return commitment;
-  commitment.currentInstallment = Math.min(commitment.totalInstallments + 1, commitment.currentInstallment + paidCount);
+  if (!commitment.totalInstallments) return commitment;
+  const current = toNumber(commitment.currentInstallment, 1);
+  commitment.currentInstallment = current + paidCount;
   if (commitment.nextDueDate) commitment.nextDueDate = addCalendarMonths(commitment.nextDueDate, paidCount);
+  commitment.paymentLog = [...(commitment.paymentLog || []), { at: new Date().toISOString(), count: paidCount, action: 'advance' }];
   if (commitment.currentInstallment > commitment.totalInstallments) {
     commitment.status = 'finished';
-    commitment.endDate = commitment.nextDueDate || commitment.endDate;
+    commitment.paused = false;
+    commitment.endDate = addCalendarMonths(commitment.nextDueDate || toISODate(new Date()), -1) || commitment.endDate;
   }
   return commitment;
 }
 
-export { toISODate, dueDateInMonth, addCalendarMonths, paidTotal, DEFAULT_SETTINGS };
+export function rewindInstallmentCommitment(commitment, count = 1) {
+  if (!commitment.totalInstallments) return commitment;
+  const wasFinished = commitment.status === 'finished' || commitment.currentInstallment > commitment.totalInstallments;
+  commitment.currentInstallment = Math.max(1, toNumber(commitment.currentInstallment, 1) - count);
+  if (commitment.nextDueDate) commitment.nextDueDate = addCalendarMonths(commitment.nextDueDate, -count);
+  if (wasFinished || commitment.status === 'finished') {
+    commitment.status = 'active';
+    commitment.endDate = '';
+  }
+  commitment.paymentLog = [...(commitment.paymentLog || []), { at: new Date().toISOString(), count, action: 'rewind' }];
+  return commitment;
+}
+
+export function settleInstallmentCommitment(commitment) {
+  const meta = installmentMeta(commitment);
+  if (meta.finished) return commitment;
+  const remaining = meta.remainingCount;
+  if (remaining > 0) advanceInstallmentCommitment(commitment, remaining);
+  return commitment;
+}
+
+export function renegotiateCommitment(commitment, { installmentValue, totalInstallments, currentInstallment, nextDueDate, note }) {
+  if (installmentValue != null) {
+    commitment.installmentValue = Math.max(0, toNumber(installmentValue));
+    commitment.amount = commitment.installmentValue;
+  }
+  if (totalInstallments != null) commitment.totalInstallments = Math.max(1, Math.round(toNumber(totalInstallments)));
+  if (currentInstallment != null) commitment.currentInstallment = Math.max(1, Math.round(toNumber(currentInstallment)));
+  if (nextDueDate) commitment.nextDueDate = String(nextDueDate).slice(0, 10);
+  if (note != null) commitment.note = String(note);
+  commitment.status = 'active';
+  commitment.paused = false;
+  commitment.needsInfo = !(commitment.totalInstallments && commitment.currentInstallment && commitment.nextDueDate);
+  return commitment;
+}
+
+export function applyInstallmentPayment(state, entry, options = {}) {
+  const before = deriveStatus(entry);
+  const wasPaid = before === PAY_STATUS.PAID;
+  if (options.full) markPaid(entry, options.date);
+  else registerPayment(entry, options);
+  const after = deriveStatus(entry);
+  if (!wasPaid && after === PAY_STATUS.PAID && entry.commitmentId) {
+    const commitment = state.commitments.find((item) => item.id === entry.commitmentId);
+    if (commitment) advanceInstallmentCommitment(commitment, 1);
+  }
+  return entry;
+}
+
+export function undoInstallmentPayment(state, entry) {
+  const wasPaid = deriveStatus(entry) === PAY_STATUS.PAID;
+  undoPayment(entry);
+  if (wasPaid && entry.commitmentId) {
+    const commitment = state.commitments.find((item) => item.id === entry.commitmentId);
+    if (commitment) {
+      rewindInstallmentCommitment(commitment, 1);
+      for (const [key, month] of Object.entries(state.months)) {
+        if (key <= state.currentMonth) continue;
+        month.entries = month.entries.filter((row) => row.commitmentId !== commitment.id);
+      }
+    }
+  }
+  return entry;
+}
+
+export { toISODate, dueDateInMonth, addCalendarMonths, paidTotal, DEFAULT_SETTINGS, cloneState, incomeReceivedAmount };

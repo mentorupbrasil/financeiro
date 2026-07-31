@@ -1,29 +1,72 @@
-const CACHE = 'respira-v8';
-const ASSETS = [
-  './', './index.html', './styles.css', './manifest.webmanifest',
-  './assets/logos/gestorpro-icon.png', './assets/logos/gestorpro-symbol.png',
-  './js/app.js', './js/storage.js', './js/model.js', './js/templates.js', './js/config.js', './js/sync.js'
+const CACHE = 'respira-v9';
+const STATIC = [
+  './assets/logos/gestorpro-icon.png',
+  './assets/logos/gestorpro-symbol.png',
+  './manifest.webmanifest',
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC)));
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
-  );
-  self.clients.claim();
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)));
+    const cache = await caches.open(CACHE);
+    const requests = await cache.keys();
+    await Promise.all(requests.map(async (req) => {
+      const url = new URL(req.url);
+      if (url.pathname.startsWith('/api/') || req.headers.has('Authorization')) {
+        await cache.delete(req);
+      }
+    }));
+    await self.clients.claim();
+  })());
 });
 
+function isApiRequest(request) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith('/api/')) return true;
+  if (request.headers.has('Authorization')) return true;
+  return false;
+}
+
+function isStaticAsset(request) {
+  const url = new URL(request.url);
+  return /\.(png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf|otf)$/i.test(url.pathname)
+    || url.pathname.endsWith('manifest.webmanifest');
+}
+
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
+  const { request } = event;
+  if (request.method !== 'GET') return;
+
+  if (isApiRequest(request)) {
+    event.respondWith(fetch(request, { cache: 'no-store' }));
+    return;
+  }
+
+  if (isStaticAsset(request)) {
+    event.respondWith(
+      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy));
+        return response;
+      })),
+    );
+    return;
+  }
+
+  // network-first for HTML/JS/CSS
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+    fetch(request).then((response) => {
+      if (response.ok && (request.destination === 'document' || request.destination === 'script' || request.destination === 'style' || /\.(js|css|html)$/i.test(new URL(request.url).pathname))) {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy));
+      }
       return response;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => caches.match(request).then((cached) => cached || caches.match('./index.html'))),
   );
 });

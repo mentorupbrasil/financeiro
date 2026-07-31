@@ -1,60 +1,102 @@
-import { neon } from '@neondatabase/serverless';
-
-const PIN = process.env.APP_PIN || '0707';
-
-function readPin(req) {
-  const header = req.headers.authorization || '';
-  if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
-  return String(req.headers['x-app-pin'] || req.query?.pin || '').trim();
-}
-
-function cors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-App-Pin');
-}
-
-function sql() {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL não configurada no servidor.');
-  return neon(process.env.DATABASE_URL);
-}
+import { sql, setCors, requireSession, readBody, ensureSchema } from './_lib.js';
 
 export default async function handler(req, res) {
-  cors(res);
+  setCors(req, res);
   if (req.method === 'OPTIONS') return res.status(204).end();
-  if (readPin(req) !== PIN) return res.status(401).json({ error: 'PIN inválido.' });
+  if (!requireSession(req, res)) return;
 
   try {
     const db = sql();
+    await ensureSchema(db);
 
     if (req.method === 'GET') {
       const rows = await db`
-        select state, updated_at
+        select state, updated_at, revision
         from public.respira_state
         where id = 'default'
         limit 1
       `;
-      if (!rows.length) return res.status(200).json({ state: null, updatedAt: null });
+      if (!rows.length) {
+        return res.status(200).json({ state: null, updatedAt: null, revision: 0 });
+      }
       return res.status(200).json({
         state: rows[0].state,
         updatedAt: rows[0].updated_at,
+        revision: Number(rows[0].revision) || 1,
       });
     }
 
     if (req.method === 'PUT') {
-      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const body = readBody(req);
       if (!body.state || typeof body.state !== 'object') {
-        return res.status(400).json({ error: 'Envie { state: {...} }.' });
+        return res.status(400).json({ error: 'Envie { state, expectedRevision }.' });
       }
-      const rows = await db`
-        insert into public.respira_state (id, state, updated_at)
-        values ('default', ${JSON.stringify(body.state)}::jsonb, now())
-        on conflict (id) do update
-          set state = excluded.state,
-              updated_at = now()
-        returning updated_at
+      const expected = Number(body.expectedRevision);
+      if (!Number.isFinite(expected)) {
+        return res.status(400).json({ error: 'expectedRevision obrigatório.' });
+      }
+
+      const current = await db`
+        select revision from public.respira_state where id = 'default' limit 1
       `;
-      return res.status(200).json({ ok: true, updatedAt: rows[0].updated_at });
+
+      if (!current.length) {
+        if (expected !== 0) {
+          return res.status(409).json({
+            error: 'Conflito de revisão.',
+            revision: 0,
+            updatedAt: null,
+          });
+        }
+        const inserted = await db`
+          insert into public.respira_state (id, state, updated_at, revision)
+          values ('default', ${JSON.stringify(body.state)}::jsonb, now(), 1)
+          returning updated_at, revision
+        `;
+        return res.status(200).json({
+          ok: true,
+          updatedAt: inserted[0].updated_at,
+          revision: Number(inserted[0].revision),
+        });
+      }
+
+      const currentRevision = Number(current[0].revision) || 1;
+      if (currentRevision !== expected) {
+        const latest = await db`
+          select state, updated_at, revision
+          from public.respira_state
+          where id = 'default'
+          limit 1
+        `;
+        return res.status(409).json({
+          error: 'Existe uma versão mais recente no Neon.',
+          revision: Number(latest[0].revision),
+          updatedAt: latest[0].updated_at,
+          state: latest[0].state,
+        });
+      }
+
+      const rows = await db`
+        update public.respira_state
+        set state = ${JSON.stringify(body.state)}::jsonb,
+            updated_at = now(),
+            revision = revision + 1
+        where id = 'default' and revision = ${expected}
+        returning updated_at, revision
+      `;
+
+      if (!rows.length) {
+        return res.status(409).json({
+          error: 'Existe uma versão mais recente no Neon.',
+          revision: currentRevision,
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        updatedAt: rows[0].updated_at,
+        revision: Number(rows[0].revision),
+      });
     }
 
     return res.status(405).json({ error: 'Método não permitido.' });

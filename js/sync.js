@@ -1,46 +1,56 @@
-import { APP_PIN, API_BASE } from './config.js';
+import { API_BASE } from './config.js';
 
-function headers(pin = APP_PIN) {
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${pin}`,
-    'X-App-Pin': pin,
-  };
-}
-
-export async function fetchRemoteState(pin = APP_PIN) {
-  const response = await fetch(`${API_BASE}/api/state`, {
-    method: 'GET',
-    headers: headers(pin),
+async function request(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     cache: 'no-store',
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
   });
-  if (response.status === 401) throw new Error('PIN inválido no servidor.');
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Falha ao ler nuvem (${response.status})`);
-  }
-  return response.json();
+  const body = await response.json().catch(() => ({}));
+  return { response, body };
 }
 
-export async function pushRemoteState(state, pin = APP_PIN) {
-  const response = await fetch(`${API_BASE}/api/state`, {
+export async function loginRemote(pin) {
+  const { response, body } = await request('/api/login', {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+  if (!response.ok) throw new Error(body.error || 'Falha no login.');
+  return body;
+}
+
+export async function logoutRemote() {
+  await request('/api/logout', { method: 'POST', body: '{}' });
+}
+
+export async function checkSession() {
+  const { response, body } = await request('/api/session', { method: 'GET' });
+  return response.ok && body.ok;
+}
+
+export async function fetchRemoteState() {
+  const { response, body } = await request('/api/state', { method: 'GET' });
+  if (response.status === 401) throw new Error('Sessão inválida.');
+  if (!response.ok) throw new Error(body.error || `Falha ao ler nuvem (${response.status})`);
+  return body;
+}
+
+export async function pushRemoteState(state, expectedRevision) {
+  const { response, body } = await request('/api/state', {
     method: 'PUT',
-    headers: headers(pin),
-    body: JSON.stringify({ state }),
+    body: JSON.stringify({ state, expectedRevision }),
   });
-  if (response.status === 401) throw new Error('PIN inválido no servidor.');
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Falha ao salvar na nuvem (${response.status})`);
+  if (response.status === 401) throw new Error('Sessão inválida.');
+  if (response.status === 409) {
+    const error = new Error(body.error || 'Conflito de revisão.');
+    error.code = 409;
+    error.payload = body;
+    throw error;
   }
-  return response.json();
-}
-
-export async function pingApi() {
-  try {
-    const response = await fetch(`${API_BASE}/api/health`, { cache: 'no-store' });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  if (!response.ok) throw new Error(body.error || `Falha ao salvar na nuvem (${response.status})`);
+  return body;
 }

@@ -1,14 +1,20 @@
 import {
   COMMITMENT_TYPES,
+  DEBT_STATUS,
+  DEBT_STATUS_LABEL,
   ENTRY_TYPES,
+  INCOME_CERTAINTY,
   PAY_STATUS,
   TYPE_LABEL,
   addMonths,
   advanceInstallmentCommitment,
+  applyInstallmentPayment,
+  cloneState,
   createEmptyState,
   currentMonthKey,
-  deleteEntryScope,
   deleteCommitmentScope,
+  deleteEntryScope,
+  debtsSummary,
   ensureMonth,
   formatDateBR,
   history,
@@ -21,13 +27,17 @@ import {
   overview,
   projection,
   registerPayment,
+  renegotiateCommitment,
+  rewindInstallmentCommitment,
+  settleInstallmentCommitment,
+  undoInstallmentPayment,
   undoPayment,
   makeId,
   toISODate,
   dueDateInMonth,
 } from './model.js';
-import { APP_PIN } from './config.js';
-import { fetchRemoteState, pushRemoteState } from './sync.js';
+import { brand } from './config.js';
+import { checkSession, fetchRemoteState, loginRemote, logoutRemote, pushRemoteState } from './sync.js';
 import {
   createVault,
   downloadEncryptedBackup,
@@ -42,10 +52,13 @@ import {
 import { brl, emptyState, escapeHtml, metric, statusPill } from './templates.js';
 
 const SESSION_FLAG = 'respira:session-open';
+const LOCAL_PIN_KEY = 'respira:local-key-hint';
+const REVISION_KEY = 'respira:sync-revision';
 const views = {
   overview: ['HOJE', 'Visão geral'],
   month: ['MÊS', 'Mês atual'],
   commitments: ['FIXOS', 'Compromissos'],
+  debts: ['DÍVIDAS', 'Dívidas'],
   history: ['PASSADO', 'Histórico'],
   settings: ['SISTEMA', 'Configurações'],
 };
@@ -83,6 +96,8 @@ const refs = {
 };
 
 let state = null;
+let syncRevision = 0;
+let sessionPin = '';
 let currentView = 'overview';
 let monthFilter = 'all';
 let dialogContext = null;
@@ -90,6 +105,7 @@ let installPrompt = null;
 let idleTimer = null;
 let saving = false;
 let cloudOnline = false;
+let pendingConflict = null;
 
 init();
 
@@ -99,11 +115,17 @@ async function init() {
     try { await navigator.serviceWorker.register('./sw.js'); } catch {}
   }
   refs.boot.classList.add('hidden');
-  if (refs.unlockPin) refs.unlockPin.value = APP_PIN;
+  if (refs.unlockPin) refs.unlockPin.value = '';
   if (sessionStorage.getItem(SESSION_FLAG) === '1') {
     try {
-      await openWithPin(APP_PIN, { quiet: true });
-      return;
+      const ok = await checkSession();
+      if (ok && hasVault()) {
+        const pin = sessionStorage.getItem(LOCAL_PIN_KEY) || '';
+        if (pin) {
+          await openWithPin(pin, { quiet: true, alreadyLoggedIn: true });
+          return;
+        }
+      }
     } catch {
       sessionStorage.removeItem(SESSION_FLAG);
     }
@@ -113,34 +135,14 @@ async function init() {
 
 function bindEvents() {
   refs.unlockForm.addEventListener('submit', handleUnlock);
-  document.querySelector('#lock-now').addEventListener('click', () => lockApp(true));
+  document.querySelector('#lock-now').addEventListener('click', () => lockApp());
   document.querySelector('#quick-add').addEventListener('click', openAddMenu);
   refs.monthPrev.addEventListener('click', () => shiftMonth(-1));
   refs.monthNext.addEventListener('click', () => shiftMonth(1));
   refs.monthToday.addEventListener('click', () => goToMonth(currentMonthKey()));
   refs.monthLabelBtn.addEventListener('click', () => goToMonth(currentMonthKey()));
   refs.entityForm.addEventListener('submit', handleEntitySubmit);
-  refs.entityDialog.addEventListener('click', async (event) => {
-    if (event.target.closest('[data-close-dialog]')) refs.entityDialog.close();
-    const choice = event.target.closest('[data-create-type]');
-    if (choice) {
-      refs.entityDialog.close();
-      setTimeout(() => openCreate(choice.dataset.createType), 60);
-      return;
-    }
-    const del = event.target.closest('[data-action="confirm-delete"]');
-    if (del) {
-      event.preventDefault();
-      const scope = del.dataset.scope || 'one';
-      const targetId = del.dataset.id;
-      const kind = del.dataset.kind || 'entry';
-      refs.entityDialog.close();
-      dialogContext = null;
-      if (kind === 'commitment') deleteCommitmentScope(state, targetId, state.currentMonth, scope);
-      else deleteEntryScope(state, targetId, state.currentMonth, scope);
-      await persist('Excluído', 'Alteração gravada na nuvem.', { requireCloud: true });
-    }
-  });
+  refs.entityDialog.addEventListener('click', handleDialogClick);
   refs.viewRoot.addEventListener('click', handleViewClick);
   refs.viewRoot.addEventListener('submit', handleViewSubmit);
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
@@ -166,7 +168,6 @@ function bindEvents() {
 function showLock() {
   refs.lock.classList.remove('hidden');
   refs.app.classList.add('hidden');
-  if (refs.unlockPin) refs.unlockPin.value = APP_PIN;
   hideError(refs.unlockError);
 }
 
@@ -174,74 +175,104 @@ async function handleUnlock(event) {
   event.preventDefault();
   try {
     hideError(refs.unlockError);
-    await openWithPin(refs.unlockPin.value.trim() || APP_PIN);
+    await openWithPin(refs.unlockPin.value.trim());
   } catch (error) {
     showError(refs.unlockError, error.message || 'Não foi possível entrar.');
   }
 }
 
-async function openWithPin(pin, { quiet = false } = {}) {
-  if (pin !== APP_PIN) throw new Error('PIN incorreto.');
+async function openWithPin(pin, { quiet = false, alreadyLoggedIn = false } = {}) {
+  if (!pin) throw new Error('Informe o PIN.');
+  sessionPin = pin;
+  if (!alreadyLoggedIn) await loginRemote(pin);
+
   let localState = null;
   if (hasVault()) {
     try { localState = normalizeState(await unlockVault(pin)); }
     catch { wipeVault(); localState = null; }
   }
+
   let remote = null;
   try {
-    remote = await fetchRemoteState(pin);
+    remote = await fetchRemoteState();
     cloudOnline = true;
   } catch (error) {
     cloudOnline = false;
     setSyncStatus('error', 'Neon offline');
+    if (!localState) throw error;
   }
+
   if (remote?.state) {
+    const remoteRevision = Number(remote.revision) || 1;
+    const localRevision = Number(localStorage.getItem(REVISION_KEY) || 0);
     const remoteState = normalizeState(remote.state);
     if (remote.updatedAt) remoteState.updatedAt = new Date(remote.updatedAt).toISOString();
-    const remoteTime = Date.parse(remote.updatedAt || remoteState.updatedAt || 0) || 0;
-    const localTime = Date.parse(localState?.updatedAt || 0) || 0;
-    if (!localState || remoteTime > localTime) {
+
+    if (localState && localRevision && localRevision < remoteRevision) {
+      // nuvem mais nova pela revisão
       state = remoteState;
+      syncRevision = remoteRevision;
       if (hasVault()) await saveVault(state);
       else await createVault(pin, state);
-      cloudOnline = true;
+      localStorage.setItem(REVISION_KEY, String(syncRevision));
       setSyncStatus('online', 'Neon sincronizada');
-    } else if (localTime > remoteTime) {
+    } else if (localState && localRevision > remoteRevision) {
       state = localState;
+      syncRevision = remoteRevision;
       try {
-        const saved = await pushRemoteState(state, pin);
+        const saved = await pushRemoteState(state, syncRevision);
+        syncRevision = Number(saved.revision) || syncRevision + 1;
         if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
         await saveVault(state);
-        cloudOnline = true;
+        localStorage.setItem(REVISION_KEY, String(syncRevision));
         setSyncStatus('online', 'Neon sincronizada');
-      } catch {
-        cloudOnline = false;
-        setSyncStatus('error', 'Falha ao enviar local');
+      } catch (error) {
+        if (error.code === 409) await handleConflict(error.payload, localState);
+        else {
+          cloudOnline = false;
+          setSyncStatus('error', 'Neon desatualizada');
+        }
       }
+    } else if (localState && localRevision === remoteRevision && localState.updatedAt !== remoteState.updatedAt) {
+      pendingConflict = { remote: remoteState, revision: remoteRevision, updatedAt: remote.updatedAt, local: localState };
+      state = localState;
+      syncRevision = remoteRevision;
+      setSyncStatus('error', 'Conflito');
     } else {
-      state = localState || remoteState;
-      cloudOnline = true;
+      state = remoteState;
+      syncRevision = remoteRevision;
+      if (hasVault()) await saveVault(state);
+      else await createVault(pin, state);
+      localStorage.setItem(REVISION_KEY, String(syncRevision));
       setSyncStatus('online', 'Neon sincronizada');
     }
   } else if (localState) {
     state = localState;
     try {
-      const saved = await pushRemoteState(state, pin);
+      const saved = await pushRemoteState(state, syncRevision || 0);
+      syncRevision = Number(saved.revision) || 1;
       if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
       await saveVault(state);
+      localStorage.setItem(REVISION_KEY, String(syncRevision));
       cloudOnline = true;
       setSyncStatus('online', 'Neon sincronizada');
-    } catch {
-      cloudOnline = false;
-      setSyncStatus('error', 'Neon desatualizada');
+    } catch (error) {
+      if (error.code === 409) {
+        await handleConflict(error.payload, state);
+      } else {
+        cloudOnline = false;
+        setSyncStatus('error', 'Neon desatualizada');
+      }
     }
   } else {
     state = createEmptyState();
     await createVault(pin, state);
     try {
-      const saved = await pushRemoteState(state, pin);
+      const saved = await pushRemoteState(state, 0);
+      syncRevision = Number(saved.revision) || 1;
       if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
       await saveVault(state);
+      localStorage.setItem(REVISION_KEY, String(syncRevision));
       cloudOnline = true;
       setSyncStatus('online', 'Neon sincronizada');
     } catch {
@@ -250,7 +281,9 @@ async function openWithPin(pin, { quiet = false } = {}) {
     }
     if (!quiet) toast('Pronto', 'Comece pelo botão Adicionar.');
   }
+
   sessionStorage.setItem(SESSION_FLAG, '1');
+  sessionStorage.setItem(LOCAL_PIN_KEY, pin);
   launchApp();
 }
 
@@ -264,7 +297,6 @@ function setSyncStatus(mode, label) {
 function launchApp() {
   refs.lock.classList.add('hidden');
   refs.app.classList.remove('hidden');
-  refs.monthLabelBtn.textContent = monthLabel(state.currentMonth, true);
   updateMonthNav();
   currentView = 'overview';
   ensureMonth(state, state.currentMonth);
@@ -272,12 +304,15 @@ function launchApp() {
   resetIdleTimer();
 }
 
-function lockApp() {
+async function lockApp() {
   if (!state) return;
+  try { await logoutRemote(); } catch {}
   lockVault();
   clearTimeout(idleTimer);
   state = null;
+  sessionPin = '';
   sessionStorage.removeItem(SESSION_FLAG);
+  sessionStorage.removeItem(LOCAL_PIN_KEY);
   showLock();
 }
 
@@ -291,8 +326,8 @@ function resetIdleTimer() {
 function setView(view) {
   if (!views[view]) return;
   currentView = view;
+  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   render();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function render() {
@@ -301,15 +336,27 @@ function render() {
   refs.viewEyebrow.textContent = eyebrow;
   refs.viewTitle.textContent = title;
   updateMonthNav();
-  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === currentView));
   const map = {
     overview: renderOverview,
     month: renderMonth,
     commitments: renderCommitments,
+    debts: renderDebts,
     history: renderHistory,
     settings: renderSettings,
   };
   refs.viewRoot.innerHTML = map[currentView]();
+  if (pendingConflict) refs.viewRoot.insertAdjacentHTML('afterbegin', renderConflictBanner());
+}
+
+function renderConflictBanner() {
+  return `<div class="callout callout--warning section-gap"><div class="callout-icon">!</div><div>
+    <strong>Conflito com o Neon</strong>
+    <p>Existe uma versão mais recente na nuvem. Sua cópia local foi preservada.</p>
+    <div class="backup-actions" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="button button--primary" type="button" data-action="conflict-use-cloud">Usar versão da nuvem</button>
+      <button class="button button--secondary" type="button" data-action="conflict-push-local">Enviar minha versão</button>
+    </div>
+  </div></div>`;
 }
 
 function renderOverview() {
@@ -319,45 +366,45 @@ function renderOverview() {
   const fmtNeed = (value) => (value == null ? '—' : String(value));
   return `
     <section class="grid grid--4">
-      ${metric('Dinheiro disponível', data.available, 'positive')}
-      ${metric('Receitas recebidas', data.receivedTotal, 'positive')}
-      ${metric('Total das contas', data.totalBills)}
-      ${metric('Total pago', data.totalPaid, 'positive')}
+      ${metric('Saldo atual', data.currentBalance, data.currentBalance >= 0 ? 'positive' : 'negative')}
+      ${metric('Recebido de verdade', data.receivedTotal, 'positive')}
       ${metric('Falta pagar', data.totalPending, 'negative')}
+      ${metric('Valor livre', data.free, data.free >= 0 ? 'positive' : 'negative')}
+      ${metric('Já reservado', data.reserved)}
+      ${metric('Ainda falta reservar', data.remainingSave)}
       ${metric('Atrasadas', data.overdueTotal, data.overdueCount ? 'negative' : '')}
-      ${metric('Reservado', data.reserved)}
-      ${metric('Sobra', data.free, data.free >= 0 ? 'positive' : 'negative')}
+      ${metric('Margem de segurança', data.safety)}
     </section>
 
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Diárias</h2><p>Meta do mês com base nas regras</p></div></div>
+      <div class="card-header"><div><h2>Diárias</h2><p>Só receitas recebidas ou garantidas reduzem a meta</p></div></div>
       <div class="card-body">
-        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Vá em Configurações e informe quanto entra por diária.</p></div></div>` : `
+        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Em Configurações.</p></div></div>` : `
         <div class="stat-strip">
           <div><span>Meta mensal</span><strong>${brl(daily.monthlyGoal)}</strong></div>
           <div><span>Planejadas</span><strong>${fmtNeed(daily.plannedDailies)}</strong></div>
           <div><span>Ainda faltam</span><strong>${fmtNeed(daily.missing)}</strong></div>
-          <div><span>Valor da diária</span><strong>${brl(daily.dailyNet)}</strong></div>
+          <div><span>Sobra ao atingir</span><strong>${daily.surplus == null ? '—' : brl(daily.surplus)}</strong></div>
         </div>
         <div class="list" style="margin-top:12px">
           <div class="list-item"><div class="list-main"><strong>Para pagar as contas</strong></div><div class="list-value">${fmtNeed(daily.needForBills)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Para proteger a margem</strong></div><div class="list-value">${fmtNeed(daily.needForSafety)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Para a meta de guardar</strong></div><div class="list-value">${fmtNeed(daily.needForSave)}</div></div>
           <div class="list-item"><div class="list-main"><strong>Para o fundo das dívidas congeladas</strong></div><div class="list-value">${fmtNeed(daily.needForFrozen)}</div></div>
-          <div class="list-item"><div class="list-main"><strong>Total necessário</strong></div><div class="list-value">${fmtNeed(daily.needForGoal)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Total de diárias necessárias</strong></div><div class="list-value">${fmtNeed(daily.needForGoal)}</div></div>
         </div>`}
       </div>
     </section>
 
     <section class="grid grid--2 section-gap">
       <div class="card">
-        <div class="card-header"><div><h2>Próximas contas</h2><p>O que ainda falta pagar</p></div></div>
+        <div class="card-header"><div><h2>Próximas contas</h2><p>Pendentes do mês</p></div></div>
         <div class="card-body">
           ${data.upcoming.length ? `<div class="list">${data.upcoming.map((item) => listRow(item)).join('')}</div>` : emptyState('✓', 'Nada pendente', 'Nenhuma conta para pagar neste mês.')}
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><div><h2>Parcelas que terminam em breve</h2><p>Até 3 parcelas restantes</p></div></div>
+        <div class="card-header"><div><h2>Parcelas que terminam em breve</h2><p>Até 3 restantes</p></div></div>
         <div class="card-body">
           ${data.endingSoon.length ? `<div class="list">${data.endingSoon.map(({ commitment, meta }) => `
             <div class="list-item">
@@ -369,11 +416,11 @@ function renderOverview() {
     </section>
 
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Projeção</h2><p>Entradas, saídas, reserva, dívidas e o que termina</p></div></div>
+      <div class="card-header"><div><h2>Projeção</h2><p>Somente leitura · não altera seus dados</p></div></div>
       <div class="card-body">
         ${proj.lightest ? `<p class="muted" style="margin:0 0 12px">Mês mais leve: <strong>${escapeHtml(monthLabel(proj.lightest.monthKey))}</strong> · sai ${brl(proj.lightest.out)}</p>` : ''}
         <div class="table-wrap"><table class="data-table"><thead><tr>
-          <th>Mês</th><th class="number">Entra</th><th class="number">Sai</th><th class="number">Reserva</th><th class="number">Dívidas</th><th class="number">Disponível</th><th class="number">Sobra</th><th>Termina</th>
+          <th>Mês</th><th class="number">Entra</th><th class="number">Sai</th><th class="number">Reserva</th><th class="number">Dívidas</th><th class="number">Antes margem</th><th class="number">Livre</th><th>Termina</th><th class="number">Libera</th>
         </tr></thead><tbody>
           ${proj.rows.map((row) => `<tr>
             <td>${escapeHtml(monthLabel(row.monthKey))}</td>
@@ -381,9 +428,10 @@ function renderOverview() {
             <td class="number">${brl(row.out)}</td>
             <td class="number">${brl(row.toReserve)}</td>
             <td class="number">${brl(row.toDebts)}</td>
-            <td class="number">${brl(row.available)}</td>
+            <td class="number">${brl(row.beforeMargin)}</td>
             <td class="number"><strong>${brl(row.balance)}</strong></td>
             <td>${row.ending.length ? escapeHtml(row.ending.join(', ')) : '—'}</td>
+            <td class="number">${brl(row.released)}</td>
           </tr>`).join('')}
         </tbody></table></div>
       </div>
@@ -393,12 +441,7 @@ function renderOverview() {
 function renderMonth() {
   const entries = monthEntries(state, state.currentMonth, monthFilter);
   const filters = [
-    ['all', 'Tudo'],
-    ['pending', 'Pendente'],
-    ['paid', 'Pago'],
-    ['overdue', 'Atrasado'],
-    ['in', 'Entradas'],
-    ['out', 'Saídas'],
+    ['all', 'Tudo'], ['pending', 'Pendente'], ['paid', 'Pago'], ['overdue', 'Atrasado'], ['in', 'Entradas'], ['out', 'Saídas'],
   ];
   return `
     <div class="filter-bar">
@@ -408,8 +451,8 @@ function renderMonth() {
       ${entries.length ? `<div class="list list--actions">${entries.map((item) => `
         <div class="list-item entry-row">
           <div class="list-main">
-            <strong>${escapeHtml(item.name)} ${item.needsInfo ? '<span class="pill pill--warning">Precisa completar</span>' : ''}</strong>
-            <small>${escapeHtml(TYPE_LABEL[item.type] || item.type)} · ${escapeHtml(item.category)} · Vence ${formatDateBR(item.dueDate)}${item.installmentNumber ? ` · Parcela ${item.installmentNumber} de ${item.totalInstallments}` : ''}</small>
+            <strong>${escapeHtml(item.name)}</strong>
+            <small>${escapeHtml(TYPE_LABEL[item.type] || item.type)} · ${escapeHtml(item.category)} · Vence ${formatDateBR(item.dueDate)}${item.installmentNumber ? ` · Parcela ${item.installmentNumber} de ${item.totalInstallments}` : ''}${item.certainty ? ` · ${certaintyLabel(item.certainty)}` : ''}</small>
           </div>
           <div class="list-value">${brl(item.amount)}<small>${statusPill(item.status)}</small></div>
           <div class="row-actions">
@@ -419,49 +462,99 @@ function renderMonth() {
             <button class="button button--ghost button--tiny" type="button" data-action="edit-entry" data-id="${item.id}">Editar</button>
             <button class="button button--ghost button--tiny" type="button" data-action="delete-entry" data-id="${item.id}">Excluir</button>
           </div>
-        </div>`).join('')}</div>` : emptyState('▤', 'Nada neste filtro', 'Use Adicionar para incluir receitas, contas, parcelas, gastos, dívidas ou reservas.', 'Adicionar', 'open-add')}
+        </div>`).join('')}</div>` : emptyState('▤', 'Nada neste filtro', 'Use Adicionar para incluir itens.', 'Adicionar', 'open-add')}
     </section>`;
+}
+
+function certaintyLabel(value) {
+  if (value === INCOME_CERTAINTY.RECEIVED) return 'Recebida';
+  if (value === INCOME_CERTAINTY.GUARANTEED) return 'Garantida';
+  return 'Prevista';
 }
 
 function renderCommitments() {
   const rows = listCommitments(state);
   return `<section class="card">
-    <div class="card-header"><div><h2>Compromissos</h2><p>Fixas, parcelas, assinaturas, financiamentos, acordos e dívidas</p></div><button class="button button--primary" type="button" data-action="open-add">Adicionar</button></div>
-    ${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Termina</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
+    <div class="card-header"><div><h2>Compromissos</h2><p>Fixas, parcelas, assinaturas e financiamentos</p></div><button class="button button--primary" type="button" data-action="open-add">Adicionar</button></div>
+    ${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
       ${rows.map((item) => `<tr>
-        <td><div class="table-title">${escapeHtml(item.name)} ${item.needsInfo ? statusPill('pending').replace('Pendente', 'Completar') : ''}</div><div class="table-subtitle">${escapeHtml(item.category)}</div></td>
+        <td><div class="table-title">${escapeHtml(item.name)}</div><div class="table-subtitle">${escapeHtml(item.category)}</div></td>
         <td>${escapeHtml(item.typeLabel)}</td>
         <td class="number">${brl(item.installmentValue || item.amount)}</td>
-        <td>${escapeHtml(item.paused ? 'Pausado' : item.status === 'finished' ? 'Encerrado' : item.needsInfo ? 'Incompleto' : 'Ativo')}</td>
+        <td>${escapeHtml(item.statusLabel)}</td>
         <td>${formatDateBR(item.nextDue)}</td>
-        <td>${item.meta.endMonth ? escapeHtml(monthLabel(item.meta.endMonth)) : (item.endDate ? formatDateBR(item.endDate) : 'Sem fim')}</td>
-        <td>${item.meta.total ? `${item.meta.current}/${item.meta.total} · faltam ${item.meta.remainingCount}` : '—'}</td>
-        <td class="number">${brl(item.meta.remainingValue)}</td>
-        <td class="actions">
-          <button class="icon-button" type="button" title="Editar" data-action="edit-commitment" data-id="${item.id}">✎</button>
-          <button class="icon-button" type="button" title="Pausar" data-action="pause-commitment" data-id="${item.id}">❚❚</button>
-          <button class="icon-button" type="button" title="Quitar" data-action="finish-commitment" data-id="${item.id}">✓</button>
-          <button class="icon-button" type="button" title="Excluir" data-action="delete-commitment" data-id="${item.id}">×</button>
-        </td>
+        <td>${item.meta.finished ? 'Encerrado' : (item.meta.total ? `${item.meta.current}/${item.meta.total}` : '—')}</td>
+        <td class="number">${item.meta.remainingCount == null ? '—' : `${item.meta.remainingCount} · ${brl(item.meta.remainingValue)}`}</td>
+        <td><div class="row-actions">
+          ${isInstallment(item) && !item.meta.finished ? `
+            <button class="button button--primary button--tiny" type="button" data-action="pay-installment" data-id="${item.id}">Pagar</button>
+            <button class="button button--secondary button--tiny" type="button" data-action="partial-installment" data-id="${item.id}">Parcial</button>
+            <button class="button button--ghost button--tiny" type="button" data-action="advance-installment" data-id="${item.id}">Antecipar</button>
+            <button class="button button--ghost button--tiny" type="button" data-action="settle-installment" data-id="${item.id}">Quitar</button>
+          ` : ''}
+          ${isInstallment(item) ? `<button class="button button--ghost button--tiny" type="button" data-action="undo-installment" data-id="${item.id}">Desfazer</button>
+          <button class="button button--ghost button--tiny" type="button" data-action="renegotiate" data-id="${item.id}">Renegociar</button>` : ''}
+          <button class="button button--ghost button--tiny" type="button" data-action="pause-commitment" data-id="${item.id}">${item.paused ? 'Reativar' : 'Pausar'}</button>
+          <button class="button button--ghost button--tiny" type="button" data-action="edit-commitment" data-id="${item.id}">Editar</button>
+          <button class="button button--ghost button--tiny" type="button" data-action="delete-commitment" data-id="${item.id}">Excluir</button>
+        </div></td>
       </tr>`).join('')}
-    </tbody></table></div>` : emptyState('◎', 'Nenhum compromisso', 'Cadastre contas fixas, compras parceladas ou dívidas.', 'Adicionar', 'open-add')}
+    </tbody></table></div>` : emptyState('◎', 'Sem compromissos', 'Adicione contas fixas ou parcelas.', 'Adicionar', 'open-add')}
   </section>`;
+}
+
+function isInstallment(item) {
+  return [COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(item.type);
+}
+
+function renderDebts() {
+  const summary = debtsSummary(state);
+  return `
+    <section class="grid grid--4">
+      ${metric('Saldo total', summary.totalBalance, 'negative')}
+      ${metric('Já pago', summary.totalPaid, 'positive')}
+      ${metric('Planejado no mês', summary.plannedMonth)}
+      ${metric('Fundo congeladas', summary.frozenFundAccumulated)}
+    </section>
+    <section class="card section-gap">
+      <div class="card-header"><div><h2>Dívidas</h2><p>Fundo congelado não paga automaticamente</p></div>
+        <button class="button button--primary" type="button" data-action="add-debt">Nova dívida</button>
+      </div>
+      ${summary.debts.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
+        <th>Credor</th><th class="number">Saldo</th><th class="number">Mensal</th><th class="number">Juros/custo</th><th>Prioridade</th><th>Status</th><th></th>
+      </tr></thead><tbody>
+        ${summary.debts.map((debt) => `<tr>
+          <td><div class="table-title">${escapeHtml(debt.creditor)}</div><div class="table-subtitle">${escapeHtml(debt.note || '')}</div></td>
+          <td class="number">${brl(debt.balance)}</td>
+          <td class="number">${brl(debt.plannedMonthly)}</td>
+          <td class="number">${brl(debt.monthlyCost)}</td>
+          <td>${debt.priority}</td>
+          <td>${escapeHtml(DEBT_STATUS_LABEL[debt.status] || debt.status)}</td>
+          <td><div class="row-actions">
+            <button class="button button--ghost button--tiny" type="button" data-action="edit-debt" data-id="${debt.id}">Editar</button>
+            <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${debt.id}">Excluir</button>
+          </div></td>
+        </tr>`).join('')}
+      </tbody></table></div>` : emptyState('◎', 'Sem dívidas', 'Cadastre credores e saldos.', 'Nova dívida', 'add-debt')}
+    </section>`;
 }
 
 function renderHistory() {
   const rows = history(state);
   return `<section class="card">
-    <div class="card-header"><div><h2>Histórico</h2><p>Meses anteriores</p></div></div>
-    ${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Mês</th><th class="number">Entrou</th><th class="number">Saiu</th><th class="number">Contas pagas</th><th class="number">Atrasadas</th><th class="number">Saldo final</th></tr></thead><tbody>
+    <div class="card-header"><div><h2>Histórico</h2><p>Valores realizados</p></div></div>
+    ${rows.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
+      <th>Mês</th><th class="number">Recebido</th><th class="number">Pago</th><th class="number">Saldo final</th><th>Pagos</th><th>Atrasos</th>
+    </tr></thead><tbody>
       ${rows.map((row) => `<tr>
         <td>${escapeHtml(monthLabel(row.monthKey))}</td>
         <td class="number">${brl(row.income)}</td>
         <td class="number">${brl(row.out)}</td>
-        <td class="number">${row.paidCount}</td>
-        <td class="number">${row.overdueCount}</td>
         <td class="number"><strong>${brl(row.balance)}</strong></td>
+        <td>${row.paidCount}</td>
+        <td>${row.overdueCount}</td>
       </tr>`).join('')}
-    </tbody></table></div>` : emptyState('⌁', 'Sem histórico', 'Feche ou avance meses para ver o passado aqui.')}
+    </tbody></table></div>` : emptyState('⌁', 'Sem histórico', 'Meses anteriores aparecem aqui.')}
   </section>`;
 }
 
@@ -483,9 +576,9 @@ function renderSettings() {
       </form>
     </section>
     <section class="card">
-      <div class="card-header"><div><h2>Dados</h2><p>PIN ${APP_PIN}</p></div></div>
+      <div class="card-header"><div><h2>Dados</h2><p>${escapeHtml(brand.domain)} · rev ${syncRevision}</p></div></div>
       <div class="settings-section backup-actions">
-        <div id="sync-banner" class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '✓' : '!'}</div><div><strong>${cloudOnline ? 'Neon sincronizada' : 'Neon desatualizada'}</strong><p>${cloudOnline ? 'Último salvamento na nuvem ok.' : 'Salve de novo ou toque em Sincronizar.'}</p></div></div>
+        <div class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '✓' : '!'}</div><div><strong>${cloudOnline ? 'Neon sincronizada' : 'Neon desatualizada'}</strong><p>${cloudOnline ? 'Último salvamento ok.' : 'Toque em Sincronizar.'}</p></div></div>
         <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
         <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup</button>
         <button class="button button--secondary button--full" type="button" data-action="import-data">Importar</button>
@@ -529,33 +622,40 @@ function openCreate(type, entry = null) {
   const common = `
     <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
     <label class="field"><span>Valor</span><input name="amount" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
-    <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || '')}" placeholder="Ex.: Casa" /></label>
+    <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || '')}" /></label>
   `;
   if (type === 'income') {
     refs.dialogFields.innerHTML = `${common}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
       <label class="field"><span>Quantidade</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
-      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária/viagem (valor = qtd × líquido da diária)</span></label>
-      <label class="check-row span-2"><input name="received" type="checkbox" ${entry?.received || entry?.status === PAY_STATUS.PAID ? 'checked' : ''}/><span>Já recebi</span></label>
+      <label class="field span-2"><span>Situação</span><select name="certainty">
+        <option value="received" ${entry?.certainty === 'received' || entry?.received ? 'selected' : ''}>Recebida</option>
+        <option value="guaranteed" ${entry?.certainty === 'guaranteed' ? 'selected' : ''}>Garantida</option>
+        <option value="forecast" ${!entry || entry?.certainty === 'forecast' || (!entry?.received && entry?.certainty !== 'guaranteed' && entry?.certainty !== 'received') ? 'selected' : ''}>Apenas prevista</option>
+      </select></label>
+      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária/viagem (valor = qtd × líquido)</span></label>
       <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
   } else if (type === 'installment') {
-    const commitment = entry?.commitmentId ? state.commitments.find((item) => item.id === entry.commitmentId) : null;
     refs.dialogFields.innerHTML = `
-      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || commitment?.name || '')}" /></label>
-      <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" required value="${entry?.amount ?? commitment?.installmentValue ?? ''}" /></label>
-      <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" step="1" required value="${entry?.totalInstallments ?? commitment?.totalInstallments ?? ''}" /></label>
-      <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" step="1" required value="${entry?.installmentNumber ?? commitment?.currentInstallment ?? 1}" /></label>
-      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" required value="${entry?.dueDate || commitment?.nextDueDate || today}" /></label>
-      <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || commitment?.category || '')}" /></label>
-      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || commitment?.note || '')}</textarea></label>
-      ${entry ? `<label class="field span-2"><span>Editar</span><select name="editScope"><option value="one">Só esta parcela</option><option value="forward">Esta e as próximas</option></select></label>` : ''}`;
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
+      <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" required value="${entry?.amount ?? ''}" /></label>
+      <label class="field"><span>Categoria</span><input name="category" value="${escapeHtml(entry?.category || 'Parcelado')}" /></label>
+      <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" required value="${entry?.installmentNumber ?? 1}" /></label>
+      <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" required value="${entry?.totalInstallments ?? ''}" /></label>
+      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" required value="${entry?.dueDate || today}" /></label>
+      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>
+      ${entry ? `<label class="field span-2"><span>Escopo</span><select name="editScope"><option value="forward">Este e os próximos</option><option value="one">Só este mês</option></select></label>` : ''}`;
   } else if (type === 'bill') {
     refs.dialogFields.innerHTML = `${common}
-      <label class="field"><span>Dia do vencimento</span><input name="dueDay" type="number" min="1" max="31" value="${entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : 10}" /></label>
-      <label class="field"><span>Data inicial</span><input name="startDate" type="date" value="${entry?.dueDate || `${state.currentMonth}-01`}" /></label>
-      <label class="field"><span>Data final (opcional)</span><input name="endDate" type="date" value="" /></label>
-      <label class="check-row span-2"><input name="recurring" type="checkbox" checked /><span>Repete todo mês</span></label>
+      <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
+      <label class="field"><span>Dia fixo</span><input name="dueDay" type="number" min="1" max="31" value="${entry?.dueDate ? Number(entry.dueDate.slice(8, 10)) : 1}" /></label>
+      <label class="check-row span-2"><input name="recurring" type="checkbox" ${entry?.commitmentId ? 'checked' : 'checked'}/><span>Repetir todo mês</span></label>
+      <label class="field"><span>Início</span><input name="startDate" type="date" value="${entry?.dueDate || today}" /></label>
+      <label class="field"><span>Fim (opcional)</span><input name="endDate" type="date" value="" /></label>
       <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
+  } else if (type === 'debt') {
+    openDebtForm(entry);
+    return;
   } else {
     refs.dialogFields.innerHTML = `${common}
       <label class="field"><span>Vencimento</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
@@ -565,64 +665,159 @@ function openCreate(type, entry = null) {
   refs.entityDialog.showModal();
 }
 
+function openDebtForm(debt = null) {
+  dialogContext = { mode: debt ? 'edit-debt' : 'create-debt', id: debt?.id || null };
+  refs.dialogSubmit.classList.remove('hidden');
+  refs.dialogFields.className = 'dialog-fields';
+  refs.dialogEyebrow.textContent = debt ? 'EDITAR' : 'NOVA';
+  refs.dialogTitle.textContent = debt ? debt.creditor : 'Dívida';
+  refs.dialogFields.innerHTML = `
+    <label class="field span-2"><span>Credor</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" /></label>
+    <label class="field"><span>Saldo devedor</span><input name="balance" type="number" min="0" step="0.01" required value="${debt?.balance ?? ''}" /></label>
+    <label class="field"><span>Valor planejado mensal</span><input name="plannedMonthly" type="number" min="0" step="0.01" required value="${debt?.plannedMonthly ?? ''}" /></label>
+    <label class="field"><span>Juros ou custo mensal</span><input name="monthlyCost" type="number" min="0" step="0.01" value="${debt?.monthlyCost ?? 0}" /></label>
+    <label class="field"><span>Prioridade</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
+    <label class="field span-2"><span>Status</span><select name="status">
+      ${Object.entries(DEBT_STATUS_LABEL).map(([id, label]) => `<option value="${id}" ${debt?.status === id ? 'selected' : ''}>${label}</option>`).join('')}
+    </select></label>
+    <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(debt?.note || '')}</textarea></label>`;
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
+async function handleDialogClick(event) {
+  if (event.target.closest('[data-close-dialog]')) refs.entityDialog.close();
+  const choice = event.target.closest('[data-create-type]');
+  if (choice) {
+    refs.entityDialog.close();
+    setTimeout(() => openCreate(choice.dataset.createType), 60);
+    return;
+  }
+  const del = event.target.closest('[data-action="confirm-delete"]');
+  if (del) {
+    event.preventDefault();
+    const scope = del.dataset.scope || 'one';
+    const targetId = del.dataset.id;
+    const kind = del.dataset.kind || 'entry';
+    refs.entityDialog.close();
+    dialogContext = null;
+    await mutateImportant(async () => {
+      if (kind === 'commitment') deleteCommitmentScope(state, targetId, state.currentMonth, scope);
+      else deleteEntryScope(state, targetId, state.currentMonth, scope);
+    }, 'Excluído', 'Alteração gravada na nuvem.');
+  }
+}
+
 async function handleEntitySubmit(event) {
   event.preventDefault();
   if (!dialogContext) return;
   const data = Object.fromEntries(new FormData(refs.entityForm));
   try {
     if (dialogContext.mode === 'partial') {
-      const month = ensureMonth(state, state.currentMonth);
-      const entry = month.entries.find((item) => item.id === dialogContext.id);
-      if (!entry) throw new Error('Item não encontrado.');
-      registerPayment(entry, data);
+      await mutateImportant(async () => {
+        const month = ensureMonth(state, state.currentMonth);
+        const entry = month.entries.find((item) => item.id === dialogContext.id);
+        if (!entry) throw new Error('Item não encontrado.');
+        if (entry.type === ENTRY_TYPES.INSTALLMENT) applyInstallmentPayment(state, entry, data);
+        else registerPayment(entry, data);
+      }, 'Pagamento registrado', '');
       refs.entityDialog.close();
       dialogContext = null;
-      await persist('Pagamento registrado', entry.name);
+      return;
+    }
+    if (dialogContext.mode === 'advance') {
+      await mutateImportant(async () => {
+        const commitment = state.commitments.find((item) => item.id === dialogContext.id);
+        if (!commitment) throw new Error('Compromisso não encontrado.');
+        const count = Math.max(1, Number(data.count) || 1);
+        advanceInstallmentCommitment(commitment, count);
+        const month = ensureMonth(state, state.currentMonth);
+        const entry = month.entries.find((item) => item.commitmentId === commitment.id && item.status !== PAY_STATUS.PAID);
+        if (entry) markPaid(entry);
+      }, 'Antecipado', '');
+      refs.entityDialog.close();
+      dialogContext = null;
+      return;
+    }
+    if (dialogContext.mode === 'renegotiate') {
+      await mutateImportant(async () => {
+        const commitment = state.commitments.find((item) => item.id === dialogContext.id);
+        if (!commitment) throw new Error('Compromisso não encontrado.');
+        renegotiateCommitment(commitment, data);
+      }, 'Renegociado', '');
+      refs.entityDialog.close();
+      dialogContext = null;
+      return;
+    }
+    if (dialogContext.mode === 'create-debt' || dialogContext.mode === 'edit-debt') {
+      await mutateImportant(async () => {
+        if (dialogContext.mode === 'edit-debt') {
+          const debt = state.debts.find((item) => item.id === dialogContext.id);
+          if (!debt) throw new Error('Dívida não encontrada.');
+          Object.assign(debt, {
+            creditor: data.creditor,
+            balance: Number(data.balance),
+            plannedMonthly: Number(data.plannedMonthly),
+            monthlyCost: Number(data.monthlyCost),
+            priority: Number(data.priority),
+            status: data.status,
+            note: data.note || '',
+            remaining: Number(data.balance),
+          });
+        } else {
+          state.debts.push({
+            id: makeId('debt'),
+            creditor: data.creditor,
+            balance: Number(data.balance),
+            plannedMonthly: Number(data.plannedMonthly),
+            monthlyCost: Number(data.monthlyCost),
+            priority: Number(data.priority),
+            status: data.status || DEBT_STATUS.ATTACK,
+            note: data.note || '',
+            paidTotal: 0,
+            remaining: Number(data.balance),
+          });
+        }
+        ensureMonth(state, state.currentMonth);
+      }, 'Dívida salva', '');
+      refs.entityDialog.close();
+      dialogContext = null;
       return;
     }
     if (dialogContext.mode === 'edit-commitment') {
-      const commitment = state.commitments.find((item) => item.id === dialogContext.id);
-      if (!commitment) throw new Error('Compromisso não encontrado.');
-      if (dialogContext.type === 'installment') {
-        commitment.name = data.name;
-        commitment.installmentValue = Number(data.installmentValue);
-        commitment.amount = Number(data.installmentValue);
-        commitment.totalInstallments = Number(data.totalInstallments);
-        commitment.currentInstallment = Number(data.currentInstallment);
-        commitment.nextDueDate = data.nextDueDate;
-        commitment.category = data.category || commitment.category;
-        commitment.note = data.note || '';
-        commitment.needsInfo = !(commitment.totalInstallments && commitment.currentInstallment);
-        if (data.editScope !== 'one') {
-          const month = ensureMonth(state, state.currentMonth);
-          for (const entry of month.entries) {
-            if (entry.commitmentId === commitment.id) {
-              entry.name = commitment.name;
-              entry.amount = commitment.installmentValue;
-              entry.totalInstallments = commitment.totalInstallments;
-              entry.category = commitment.category;
-            }
-          }
+      await mutateImportant(async () => {
+        const commitment = state.commitments.find((item) => item.id === dialogContext.id);
+        if (!commitment) throw new Error('Compromisso não encontrado.');
+        if (dialogContext.type === 'installment') {
+          commitment.name = data.name;
+          commitment.installmentValue = Number(data.installmentValue);
+          commitment.amount = Number(data.installmentValue);
+          commitment.totalInstallments = Number(data.totalInstallments);
+          commitment.currentInstallment = Number(data.currentInstallment);
+          commitment.nextDueDate = data.nextDueDate;
+          commitment.category = data.category || commitment.category;
+          commitment.note = data.note || '';
+          commitment.needsInfo = !(commitment.totalInstallments && commitment.currentInstallment);
+        } else {
+          commitment.name = data.name;
+          commitment.amount = Number(data.amount);
+          commitment.category = data.category || commitment.category;
+          commitment.dueDay = Number(data.dueDay) || commitment.dueDay || 1;
+          commitment.startDate = data.startDate || commitment.startDate;
+          commitment.endDate = data.endDate || '';
+          commitment.note = data.note || '';
         }
-      } else {
-        commitment.name = data.name;
-        commitment.amount = Number(data.amount);
-        commitment.category = data.category || commitment.category;
-        commitment.dueDay = Number(data.dueDay) || commitment.dueDay || 1;
-        commitment.startDate = data.startDate || commitment.startDate;
-        commitment.endDate = data.endDate || '';
-        commitment.note = data.note || '';
-      }
+      }, 'Compromisso atualizado', '');
       refs.entityDialog.close();
       dialogContext = null;
-      await persist('Compromisso atualizado', commitment.name);
       return;
     }
-    if (dialogContext.mode === 'edit') await saveEdit(data);
-    else await saveCreate(data);
+    await mutateImportant(async () => {
+      if (dialogContext.mode === 'edit') await saveEdit(data);
+      else await saveCreate(data);
+    }, 'Salvo', 'Atualizado.');
     refs.entityDialog.close();
     dialogContext = null;
-    await persist('Salvo', 'Atualizado.');
   } catch (error) {
     showError(refs.dialogError, error.message);
   }
@@ -650,6 +845,7 @@ async function saveCreate(data) {
       needsInfo: false,
       status: 'active',
       startDate: data.nextDueDate,
+      paymentLog: [],
     };
     state.commitments.push(commitment);
     month.entries.push({
@@ -696,11 +892,14 @@ async function saveCreate(data) {
     });
     return;
   }
+  if (type === 'debt') {
+    openDebtForm();
+    throw new Error('Use o formulário de dívida.');
+  }
   const entryType = {
     income: ENTRY_TYPES.INCOME,
     bill: ENTRY_TYPES.BILL,
     expense: ENTRY_TYPES.EXPENSE,
-    debt: ENTRY_TYPES.DEBT,
     reserve: ENTRY_TYPES.RESERVE,
   }[type] || ENTRY_TYPES.BILL;
   const entry = {
@@ -711,30 +910,10 @@ async function saveCreate(data) {
     category: data.category || TYPE_LABEL[entryType],
     dueDate: data.dueDate || dueDateInMonth(state.currentMonth, Number(data.dueDay) || 1),
     note: data.note || '',
-    received: data.received === 'on',
     payments: [],
     status: PAY_STATUS.PENDING,
   };
   if (entry.type === ENTRY_TYPES.INCOME) applyIncomeFields(entry, data);
-  if (entry.type === ENTRY_TYPES.INCOME && entry.received) {
-    entry.payments = [{ id: makeId('pay'), date: entry.dueDate || toISODate(new Date()), amount: entry.amount, method: 'Recebido', note: '' }];
-    entry.status = PAY_STATUS.PAID;
-  }
-  if (entry.type === ENTRY_TYPES.DEBT) {
-    state.commitments.push({
-      id: makeId('commit'),
-      type: COMMITMENT_TYPES.DEBT,
-      name: entry.name,
-      amount: entry.amount,
-      category: 'Dívida',
-      note: entry.note,
-      dueDay: Number(String(entry.dueDate).slice(8, 10)) || 1,
-      nextDueDate: entry.dueDate,
-      startDate: entry.dueDate,
-      status: 'active',
-    });
-    entry.commitmentId = state.commitments.at(-1).id;
-  }
   month.entries.push(entry);
 }
 
@@ -750,7 +929,6 @@ async function saveEdit(data) {
     entry.note = data.note || '';
     entry.installmentNumber = Number(data.currentInstallment);
     entry.totalInstallments = Number(data.totalInstallments);
-    entry.needsInfo = !(entry.installmentNumber && entry.totalInstallments);
     const commitment = state.commitments.find((item) => item.id === entry.commitmentId);
     if (commitment && data.editScope !== 'one') {
       commitment.name = entry.name;
@@ -762,29 +940,6 @@ async function saveEdit(data) {
       commitment.category = entry.category;
       commitment.note = entry.note;
       commitment.needsInfo = false;
-    } else if (commitment && data.editScope === 'one') {
-      // only this entry
-    } else if (!commitment) {
-      // create commitment from completed info
-      if (entry.totalInstallments && entry.installmentNumber) {
-        const created = {
-          id: makeId('commit'),
-          type: COMMITMENT_TYPES.INSTALLMENT,
-          name: entry.name,
-          installmentValue: entry.amount,
-          amount: entry.amount,
-          totalInstallments: entry.totalInstallments,
-          currentInstallment: entry.installmentNumber,
-          nextDueDate: entry.dueDate,
-          category: entry.category,
-          note: entry.note,
-          needsInfo: false,
-          status: 'active',
-          startDate: entry.dueDate,
-        };
-        state.commitments.push(created);
-        entry.commitmentId = created.id;
-      }
     }
     return;
   }
@@ -793,23 +948,25 @@ async function saveEdit(data) {
   entry.category = data.category || entry.category;
   entry.dueDate = data.dueDate || entry.dueDate;
   entry.note = data.note || '';
-  if (entry.type === ENTRY_TYPES.INCOME) {
-    applyIncomeFields(entry, data);
-    entry.received = data.received === 'on';
-    if (entry.received && !(entry.payments || []).length) {
-      entry.payments = [{ id: makeId('pay'), date: entry.dueDate || toISODate(new Date()), amount: entry.amount, method: 'Recebido', note: '' }];
-    }
-    if (!entry.received) entry.payments = [];
-  }
+  if (entry.type === ENTRY_TYPES.INCOME) applyIncomeFields(entry, data);
 }
 
 function applyIncomeFields(entry, data) {
   entry.isDaily = data.isDaily === 'on';
   entry.quantity = Math.max(0, Number(data.quantity) || (entry.isDaily ? 1 : 0));
+  entry.certainty = Object.values(INCOME_CERTAINTY).includes(data.certainty) ? data.certainty : INCOME_CERTAINTY.FORECAST;
+  entry.received = entry.certainty === INCOME_CERTAINTY.RECEIVED;
   if (entry.isDaily) {
     const dailyNet = Number(state.settings.dailyNetValue) || 0;
     if (dailyNet > 0 && entry.quantity > 0) entry.amount = Math.round(entry.quantity * dailyNet * 100) / 100;
     if (!data.category) entry.category = 'Diária';
+  }
+  if (entry.certainty === INCOME_CERTAINTY.RECEIVED) {
+    if (!(entry.payments || []).length) {
+      entry.payments = [{ id: makeId('pay'), date: entry.dueDate || toISODate(new Date()), amount: entry.amount, method: 'Recebido', note: '' }];
+    }
+  } else if (entry.certainty !== INCOME_CERTAINTY.RECEIVED) {
+    entry.payments = [];
   }
 }
 
@@ -820,42 +977,110 @@ async function handleViewClick(event) {
   const month = ensureMonth(state, state.currentMonth);
   const entry = month.entries.find((item) => item.id === id);
 
-  if (action === 'filter') {
-    monthFilter = id;
-    render();
-    return;
-  }
+  if (action === 'filter') { monthFilter = id; render(); return; }
   if (action === 'open-add') return openAddMenu();
+  if (action === 'add-debt') return openDebtForm();
+  if (action === 'conflict-use-cloud') return resolveConflictCloud();
+  if (action === 'conflict-push-local') return resolveConflictLocal();
+
   if (action === 'pay-full' && entry) {
-    markPaid(entry);
-    if (entry.type === ENTRY_TYPES.INSTALLMENT && entry.commitmentId) {
-      const commitment = state.commitments.find((item) => item.id === entry.commitmentId);
-      if (commitment) advanceInstallmentCommitment(commitment, 1);
-    }
-    await persist('Pago', entry.name);
+    await mutateImportant(async () => {
+      if (entry.type === ENTRY_TYPES.INSTALLMENT) applyInstallmentPayment(state, entry, { full: true });
+      else markPaid(entry);
+    }, 'Pago', entry.name);
     return;
   }
-  if (action === 'pay-partial' && entry) {
-    openPartialPay(entry);
-    return;
-  }
+  if (action === 'pay-partial' && entry) return openPartialPay(entry);
   if (action === 'undo-pay' && entry) {
-    undoPayment(entry);
-    await persist('Desfeito', entry.name);
+    await mutateImportant(async () => {
+      if (entry.type === ENTRY_TYPES.INSTALLMENT) undoInstallmentPayment(state, entry);
+      else undoPayment(entry);
+    }, 'Desfeito', entry.name);
     return;
   }
   if (action === 'edit-entry' && entry) {
     openCreate(entry.type === ENTRY_TYPES.INSTALLMENT ? 'installment' : entry.type, entry);
     return;
   }
-  if (action === 'delete-entry' && entry) {
-    openDeleteScope(entry);
+  if (action === 'delete-entry' && entry) return openDeleteScope(entry);
+
+  if (action === 'pay-installment') {
+    const commitment = state.commitments.find((item) => item.id === id);
+    if (!commitment) return;
+    await mutateImportant(async () => {
+      let row = month.entries.find((item) => item.commitmentId === id && item.status !== PAY_STATUS.PAID);
+      if (!row) {
+        ensureMonth(state, state.currentMonth);
+        row = month.entries.find((item) => item.commitmentId === id);
+      }
+      if (row) applyInstallmentPayment(state, row, { full: true });
+      else advanceInstallmentCommitment(commitment, 1);
+    }, 'Parcela paga', commitment.name);
+    return;
+  }
+  if (action === 'partial-installment') {
+    const row = month.entries.find((item) => item.commitmentId === id);
+    if (row) openPartialPay(row);
+    return;
+  }
+  if (action === 'advance-installment') {
+    dialogContext = { mode: 'advance', id };
+    refs.dialogEyebrow.textContent = 'ANTECIPAR';
+    refs.dialogTitle.textContent = 'Quantas parcelas?';
+    refs.dialogSubmit.classList.remove('hidden');
+    refs.dialogFields.className = 'dialog-fields';
+    refs.dialogFields.innerHTML = `<label class="field"><span>Quantidade</span><input name="count" type="number" min="1" value="1" required /></label>`;
+    hideError(refs.dialogError);
+    refs.entityDialog.showModal();
+    return;
+  }
+  if (action === 'settle-installment') {
+    const commitment = state.commitments.find((item) => item.id === id);
+    if (!commitment) return;
+    const ok = await confirmDialog('Quitar saldo restante?', commitment.name, 'Quitar');
+    if (!ok) return;
+    await mutateImportant(async () => {
+      settleInstallmentCommitment(commitment);
+      for (const itemMonth of Object.values(state.months)) {
+        for (const row of itemMonth.entries) {
+          if (row.commitmentId === id && row.status !== PAY_STATUS.PAID) markPaid(row);
+        }
+      }
+    }, 'Quitado', commitment.name);
+    return;
+  }
+  if (action === 'undo-installment') {
+    const commitment = state.commitments.find((item) => item.id === id);
+    if (!commitment) return;
+    await mutateImportant(async () => {
+      const paid = [...month.entries].reverse().find((item) => item.commitmentId === id && item.status === PAY_STATUS.PAID);
+      if (paid) undoInstallmentPayment(state, paid);
+      else rewindInstallmentCommitment(commitment, 1);
+    }, 'Desfeito', commitment.name);
+    return;
+  }
+  if (action === 'renegotiate') {
+    const commitment = state.commitments.find((item) => item.id === id);
+    if (!commitment) return;
+    dialogContext = { mode: 'renegotiate', id };
+    refs.dialogEyebrow.textContent = 'RENEGOCIAR';
+    refs.dialogTitle.textContent = commitment.name;
+    refs.dialogSubmit.classList.remove('hidden');
+    refs.dialogFields.className = 'dialog-fields';
+    refs.dialogFields.innerHTML = `
+      <label class="field"><span>Valor da parcela</span><input name="installmentValue" type="number" min="0" step="0.01" value="${commitment.installmentValue}" required /></label>
+      <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" value="${commitment.totalInstallments || 1}" required /></label>
+      <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" value="${Math.min(commitment.currentInstallment || 1, commitment.totalInstallments || 1)}" required /></label>
+      <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" value="${commitment.nextDueDate || ''}" required /></label>
+      <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(commitment.note || '')}</textarea></label>`;
+    hideError(refs.dialogError);
+    refs.entityDialog.showModal();
     return;
   }
   if (action === 'edit-commitment') {
     const commitment = state.commitments.find((item) => item.id === id);
     if (!commitment) return;
-    if (commitment.type === COMMITMENT_TYPES.INSTALLMENT) {
+    if (isInstallment(commitment)) {
       openCreate('installment', {
         id: `tmp_${commitment.id}`,
         commitmentId: commitment.id,
@@ -877,6 +1102,7 @@ async function handleViewClick(event) {
         category: commitment.category,
         dueDate: dueDateInMonth(state.currentMonth, commitment.dueDay || 1),
         note: commitment.note,
+        commitmentId: commitment.id,
       });
       dialogContext = { mode: 'edit-commitment', type: 'bill', id: commitment.id };
     }
@@ -885,24 +1111,34 @@ async function handleViewClick(event) {
   if (action === 'pause-commitment') {
     const commitment = state.commitments.find((item) => item.id === id);
     if (!commitment) return;
-    commitment.paused = !commitment.paused;
-    commitment.status = commitment.paused ? 'paused' : 'active';
-    await persist(commitment.paused ? 'Pausado' : 'Reativado', commitment.name);
-    return;
-  }
-  if (action === 'finish-commitment') {
-    const commitment = state.commitments.find((item) => item.id === id);
-    if (!commitment) return;
-    commitment.status = 'finished';
-    commitment.paused = false;
-    if (commitment.totalInstallments) commitment.currentInstallment = commitment.totalInstallments + 1;
-    await persist('Quitado', commitment.name);
+    await mutateImportant(async () => {
+      commitment.paused = !commitment.paused;
+      commitment.status = commitment.paused ? 'paused' : 'active';
+    }, commitment.paused ? 'Pausado' : 'Reativado', commitment.name);
     return;
   }
   if (action === 'delete-commitment') {
     const commitment = state.commitments.find((item) => item.id === id);
     if (!commitment) return;
     openDeleteCommitment(commitment);
+    return;
+  }
+  if (action === 'edit-debt') {
+    const debt = state.debts.find((item) => item.id === id);
+    if (debt) openDebtForm(debt);
+    return;
+  }
+  if (action === 'delete-debt') {
+    const debt = state.debts.find((item) => item.id === id);
+    if (!debt) return;
+    const ok = await confirmDialog('Excluir dívida?', debt.creditor, 'Excluir');
+    if (!ok) return;
+    await mutateImportant(async () => {
+      state.debts = state.debts.filter((item) => item.id !== id);
+      for (const itemMonth of Object.values(state.months)) {
+        itemMonth.entries = itemMonth.entries.filter((row) => row.debtId !== id);
+      }
+    }, 'Excluído', debt.creditor);
     return;
   }
   if (action === 'sync-now') return syncNow();
@@ -913,18 +1149,24 @@ async function handleViewClick(event) {
   }
   if (action === 'import-data') return refs.importFile.click();
   if (action === 'wipe-local') {
-    const ok = await confirmDialog('Zerar tudo?', 'Apaga local e Neon. Começa do zero.', 'Zerar');
+    const ok = await confirmDialog('Zerar tudo?', 'Apaga local e Neon.', 'Zerar');
     if (!ok) return;
-    state = createEmptyState();
+    const empty = createEmptyState();
     try {
-      const saved = await pushRemoteState(state, APP_PIN);
-      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+      const saved = await pushRemoteState(empty, syncRevision);
+      syncRevision = Number(saved.revision) || syncRevision + 1;
     } catch (error) {
-      toast('Neon falhou', error.message, 'error');
-      return;
+      if (error.code === 409 && error.payload?.revision != null) {
+        const saved = await pushRemoteState(empty, Number(error.payload.revision));
+        syncRevision = Number(saved.revision);
+      } else {
+        toast('Neon falhou', error.message, 'error');
+        return;
+      }
     }
     wipeVault();
-    await createVault(APP_PIN, state);
+    await createVault(sessionPin, empty);
+    state = empty;
     sessionStorage.removeItem(SESSION_FLAG);
     toast('Zerado', 'Pode começar a lançar.');
     location.reload();
@@ -948,19 +1190,48 @@ function openPartialPay(entry) {
   refs.entityDialog.showModal();
 }
 
+function openDeleteScope(entry) {
+  dialogContext = { mode: 'delete-scope', id: entry.id };
+  refs.dialogEyebrow.textContent = 'EXCLUIR';
+  refs.dialogTitle.textContent = entry.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  const options = entry.commitmentId
+    ? [['one', 'Só este mês'], ['forward', 'Este e os próximos'], ['all', 'Compromisso completo']]
+    : [['one', 'Excluir este lançamento']];
+  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
+function openDeleteCommitment(commitment) {
+  refs.dialogEyebrow.textContent = 'EXCLUIR';
+  refs.dialogTitle.textContent = commitment.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  refs.dialogFields.innerHTML = [
+    ['one', 'Só este mês'],
+    ['forward', 'Este e os próximos'],
+    ['all', 'Compromisso completo'],
+  ].map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
 async function handleViewSubmit(event) {
   const form = event.target.closest('form[data-form]');
   if (!form) return;
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   if (form.dataset.form === 'settings') {
-    state.settings.dailyNetValue = Number(data.dailyNetValue);
-    state.settings.saveGoal = Number(data.saveGoal);
-    state.settings.frozenDebtFund = Number(data.frozenDebtFund);
-    state.settings.safetyMargin = Number(data.safetyMargin);
-    state.settings.lockAfterMinutes = Number(data.lockAfterMinutes);
-    state.settings.ownerName = String(data.ownerName || '').trim();
-    await persist('Salvo', 'Configurações atualizadas.');
+    await mutateImportant(async () => {
+      state.settings.dailyNetValue = Number(data.dailyNetValue);
+      state.settings.saveGoal = Number(data.saveGoal);
+      state.settings.frozenDebtFund = Number(data.frozenDebtFund);
+      state.settings.safetyMargin = Number(data.safetyMargin);
+      state.settings.lockAfterMinutes = Number(data.lockAfterMinutes);
+      state.settings.ownerName = String(data.ownerName || '').trim();
+    }, 'Salvo', 'Configurações atualizadas.');
   }
 }
 
@@ -969,7 +1240,6 @@ function updateMonthNav() {
   refs.monthLabelBtn.textContent = monthLabel(state.currentMonth, true).replace('.', '');
   const isCurrent = state.currentMonth === currentMonthKey();
   refs.monthToday.classList.toggle('hidden', isCurrent);
-  refs.monthLabelBtn.title = isCurrent ? 'Mês atual' : 'Voltar para este mês';
 }
 
 async function shiftMonth(delta) {
@@ -991,65 +1261,128 @@ async function goToMonth(target) {
   updateMonthNav();
 }
 
-async function handleMonthChange() {
-  // mantido por compatibilidade — navegação usa goToMonth
-}
-
-async function persist(title = '', message = '', { requireCloud = false } = {}) {
+async function mutateImportant(mutator, title, message) {
   if (saving) return false;
+  const previous = cloneState(state);
+  const previousRevision = syncRevision;
   saving = true;
   try {
-    const previousUpdatedAt = state.updatedAt;
+    await mutator();
     state = normalizeState(state);
-    state.updatedAt = previousUpdatedAt || state.updatedAt;
+    state.updatedAt = previous.updatedAt;
     state.updatedAt = new Date().toISOString();
+    const saved = await pushRemoteState(state, syncRevision);
+    syncRevision = Number(saved.revision) || syncRevision + 1;
+    if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
     await saveVault(state);
-    try {
-      const saved = await pushRemoteState(state, APP_PIN);
-      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
-      await saveVault(state);
-      cloudOnline = true;
-      setSyncStatus('online', 'Neon sincronizada');
-      render();
-      if (title) toast(title, message);
-      return true;
-    } catch (error) {
+    localStorage.setItem(REVISION_KEY, String(syncRevision));
+    cloudOnline = true;
+    setSyncStatus('online', 'Neon sincronizada');
+    render();
+    if (title) toast(title, message);
+    return true;
+  } catch (error) {
+    state = previous;
+    syncRevision = previousRevision;
+    await saveVault(state).catch(() => {});
+    render();
+    if (error.code === 409) {
+      await handleConflict(error.payload, previous);
+      toast('Conflito', 'Nada foi alterado. Escolha a versão.', 'error');
+    } else {
       cloudOnline = false;
       setSyncStatus('error', 'Falha no Neon');
-      render();
-      if (requireCloud) {
-        toast('Não gravou na nuvem', error.message, 'error');
-        return false;
-      }
-      toast(title || 'Salvo local', message || 'Neon falhou. Toque em Sincronizar.', title ? 'success' : 'error');
-      return !requireCloud;
+      toast('Nada foi alterado', error.message || 'Falha ao gravar no Neon.', 'error');
     }
-  } catch (error) {
-    toast('Erro', error.message, 'error');
     return false;
   } finally {
     saving = false;
   }
 }
 
-async function syncNow() {
-  try {
-    const remote = await fetchRemoteState(APP_PIN);
-    const remoteTime = Date.parse(remote.updatedAt || 0) || 0;
-    const localTime = Date.parse(state.updatedAt || 0) || 0;
-    if (remote?.state && remoteTime > localTime) {
+async function handleConflict(payload, localCopy) {
+  pendingConflict = {
+    remote: payload?.state ? normalizeState(payload.state) : null,
+    revision: Number(payload?.revision) || syncRevision,
+    updatedAt: payload?.updatedAt || null,
+    local: localCopy || cloneState(state),
+  };
+  if (pendingConflict.remote && payload?.updatedAt) {
+    pendingConflict.remote.updatedAt = new Date(payload.updatedAt).toISOString();
+  }
+  cloudOnline = false;
+  setSyncStatus('error', 'Conflito');
+  render();
+}
+
+async function resolveConflictCloud() {
+  if (!pendingConflict?.remote) {
+    try {
+      const remote = await fetchRemoteState();
+      if (!remote.state) return;
       state = normalizeState(remote.state);
       if (remote.updatedAt) state.updatedAt = new Date(remote.updatedAt).toISOString();
+      syncRevision = Number(remote.revision) || syncRevision;
+    } catch (error) {
+      toast('Erro', error.message, 'error');
+      return;
+    }
+  } else {
+    state = pendingConflict.remote;
+    syncRevision = pendingConflict.revision;
+  }
+  await saveVault(state);
+  localStorage.setItem(REVISION_KEY, String(syncRevision));
+  pendingConflict = null;
+  cloudOnline = true;
+  setSyncStatus('online', 'Neon sincronizada');
+  render();
+  toast('Nuvem aplicada', 'Versão do Neon em uso.');
+}
+
+async function resolveConflictLocal() {
+  if (!pendingConflict) return;
+  try {
+    const expected = pendingConflict.revision;
+    const local = pendingConflict.local || state;
+    local.updatedAt = new Date().toISOString();
+    const saved = await pushRemoteState(local, expected);
+    state = normalizeState(local);
+    syncRevision = Number(saved.revision) || expected + 1;
+    if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+    await saveVault(state);
+    localStorage.setItem(REVISION_KEY, String(syncRevision));
+    pendingConflict = null;
+    cloudOnline = true;
+    setSyncStatus('online', 'Neon sincronizada');
+    render();
+    toast('Local enviado', 'Sua versão foi gravada no Neon.');
+  } catch (error) {
+    toast('Falha', error.message, 'error');
+  }
+}
+
+async function syncNow() {
+  try {
+    const remote = await fetchRemoteState();
+    syncRevision = Number(remote.revision) || syncRevision;
+    localStorage.setItem(REVISION_KEY, String(syncRevision));
+    if (remote?.state) {
+      const remoteState = normalizeState(remote.state);
+      if (remote.updatedAt) remoteState.updatedAt = new Date(remote.updatedAt).toISOString();
+      state = remoteState;
       await saveVault(state);
       cloudOnline = true;
       setSyncStatus('online', 'Neon sincronizada');
       render();
-      toast('Sincronizado', 'Versão da nuvem aplicada.');
+      toast('Sincronizado', 'Dados do Neon carregados.');
       return;
     }
-    const saved = await pushRemoteState(state, APP_PIN);
+    const saved = await pushRemoteState(state, syncRevision);
+    syncRevision = Number(saved.revision) || syncRevision + 1;
     if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
     await saveVault(state);
+    localStorage.setItem(REVISION_KEY, String(syncRevision));
     cloudOnline = true;
     setSyncStatus('online', 'Neon sincronizada');
     render();
@@ -1057,95 +1390,58 @@ async function syncNow() {
   } catch (error) {
     cloudOnline = false;
     setSyncStatus('error', 'Falha no Neon');
-    render();
     toast('Sync falhou', error.message, 'error');
   }
 }
 
-function openDeleteScope(entry) {
-  dialogContext = { mode: 'delete-scope', id: entry.id };
-  refs.dialogEyebrow.textContent = 'EXCLUIR';
-  refs.dialogTitle.textContent = entry.name;
-  refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
-  const options = entry.commitmentId
-    ? [
-        ['one', 'Só este mês'],
-        ['forward', 'Este e os próximos'],
-        ['all', 'Compromisso completo'],
-      ]
-    : [['one', 'Excluir este lançamento']];
-  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-}
-
-function openDeleteCommitment(commitment) {
-  dialogContext = { mode: 'delete-scope', id: commitment.id };
-  refs.dialogEyebrow.textContent = 'EXCLUIR';
-  refs.dialogTitle.textContent = commitment.name;
-  refs.dialogSubmit.classList.add('hidden');
-  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
-  const options = [
-    ['one', 'Só este mês'],
-    ['forward', 'Este e os próximos'],
-    ['all', 'Compromisso completo'],
-  ];
-  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-}
-
-async function handleImportFile() {
-  const file = refs.importFile.files?.[0];
-  refs.importFile.value = '';
+async function handleImportFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
   if (!file) return;
   try {
     const imported = await parseImportFile(file);
     if (imported.type === 'encrypted-backup') {
-      const ok = await confirmDialog('Restaurar backup?', 'Substitui os dados locais.', 'Restaurar');
-      if (!ok) return;
       restoreEncryptedBackup(imported.value);
-      location.reload();
+      toast('Backup', 'Restaurado. Entre com o PIN.');
+      await lockApp();
       return;
     }
-    const ok = await confirmDialog('Importar dados?', 'Substitui o conteúdo atual.', 'Importar');
-    if (!ok) return;
-    state = normalizeState(imported.value);
-    await persist('Importado', 'Dados carregados.');
+    await mutateImportant(async () => {
+      state = normalizeState(imported.value);
+    }, 'Importado', 'Dados carregados.');
   } catch (error) {
-    toast('Erro', error.message, 'error');
+    toast('Importação falhou', error.message, 'error');
   }
 }
 
+function toast(title, message = '', tone = 'success') {
+  const el = document.createElement('div');
+  el.className = `toast toast--${tone}`;
+  el.innerHTML = `<strong>${escapeHtml(title)}</strong>${message ? `<span>${escapeHtml(message)}</span>` : ''}`;
+  refs.toastRegion.append(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+function showError(node, message) {
+  node.textContent = message;
+  node.classList.remove('hidden');
+}
+
+function hideError(node) {
+  node.textContent = '';
+  node.classList.add('hidden');
+}
+
 function confirmDialog(title, copy, actionLabel = 'Confirmar') {
-  refs.confirmTitle.textContent = title;
-  refs.confirmCopy.textContent = copy;
-  refs.confirmAction.textContent = actionLabel;
-  refs.confirmDialog.showModal();
   return new Promise((resolve) => {
+    refs.confirmTitle.textContent = title;
+    refs.confirmCopy.textContent = copy || '';
+    refs.confirmAction.textContent = actionLabel;
     const onClose = () => {
       refs.confirmDialog.removeEventListener('close', onClose);
       resolve(refs.confirmDialog.returnValue === 'confirm');
     };
     refs.confirmDialog.addEventListener('close', onClose);
+    refs.confirmDialog.showModal();
   });
-}
-
-function toast(title, copy, type = 'success') {
-  const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.innerHTML = `<div class="callout-icon">${type === 'error' ? '!' : '✓'}</div><div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(copy || '')}</span></div>`;
-  refs.toastRegion.append(el);
-  setTimeout(() => el.remove(), 3200);
-}
-
-function showError(el, message) {
-  el.textContent = message;
-  el.classList.remove('hidden');
-}
-
-function hideError(el) {
-  el.textContent = '';
-  el.classList.add('hidden');
 }

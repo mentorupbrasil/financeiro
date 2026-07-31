@@ -1,6 +1,4 @@
-/** Config pública do app pessoal GestorPro Financeiro / Respira */
-export const APP_PIN = '0707';
-
+/** Config pública — sem credenciais */
 export const brand = {
   name: 'Respira',
   tagline: 'Comando financeiro pessoal.',
