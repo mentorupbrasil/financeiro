@@ -164,6 +164,12 @@ function bindEvents() {
     refs.installApp.classList.add('hidden');
   });
   ['pointerdown', 'keydown', 'touchstart'].forEach((name) => document.addEventListener(name, resetIdleTimer, { passive: true }));
+  refs.entityDialog.addEventListener('close', () => {
+    document.body.classList.remove('dialog-open');
+  });
+  refs.confirmDialog.addEventListener('close', () => {
+    document.body.classList.remove('dialog-open');
+  });
 }
 
 function showLock() {
@@ -370,6 +376,19 @@ function readForm(form) {
   return data;
 }
 
+function showEntityDialog() {
+  hideError(refs.dialogError);
+  document.body.classList.add('dialog-open');
+  if (!refs.entityDialog.open) refs.entityDialog.showModal();
+  bindMoneyInputs(refs.entityDialog);
+}
+
+function closeEntityDialog() {
+  document.body.classList.remove('dialog-open');
+  if (refs.entityDialog.open) refs.entityDialog.close();
+  dialogContext = null;
+}
+
 function renderConflictBanner() {
   return `<div class="callout callout--warning section-gap"><div class="callout-icon">!</div><div>
     <strong>Conflito com o Neon</strong>
@@ -532,7 +551,7 @@ function renderMonth() {
             <button class="button button--ghost button--tiny" type="button" data-action="edit-entry" data-id="${item.id}">Editar</button>
             <button class="button button--ghost button--tiny" type="button" data-action="delete-entry" data-id="${item.id}">Excluir</button>
           </div>
-        </div>`).join('')}</div>` : emptyState('▤', 'Nada neste filtro', 'Use Adicionar para incluir itens.', 'Adicionar', 'open-add')}
+        </div>`).join('')}</div>` : emptyState('▤', 'Nada neste filtro', 'Use o botão Adicionar no topo para incluir itens.')}
     </section>`;
 }
 
@@ -553,7 +572,7 @@ function renderCommitments() {
     return buttons.join('');
   };
   return `<section class="card">
-    <div class="card-header"><div><h2>Compromissos</h2><p>Contas fixas e parcelas</p></div><button class="button button--primary" type="button" data-action="open-add">Adicionar</button></div>
+    <div class="card-header"><div><h2>Compromissos</h2><p>Use Adicionar no topo para contas fixas ou parcelas</p></div></div>
     ${rows.length ? `
       <div class="table-wrap commitments-table"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
       ${rows.map((item) => `<tr>
@@ -578,7 +597,7 @@ function renderCommitments() {
         </div>
         <div class="commitment-card__actions">${actionButtons(item)}</div>
       </div>`).join('')}
-    </div>` : emptyState('◎', 'Sem compromissos', 'Adicione contas fixas ou parcelas.', 'Adicionar', 'open-add')}
+    </div>` : emptyState('◎', 'Sem compromissos', 'Inclua pelo botão Adicionar no topo.')}
   </section>`;
 }
 
@@ -603,9 +622,7 @@ function renderDebts() {
       <p>Foque em uma por vez. Agora: <strong>${escapeHtml(attack[0].creditor)}</strong> · ${brl(attack[0].balance)}. Juros = só o mínimo. Congelada = não pague agora.</p>
     </div></div>` : ''}
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Dívidas</h2><p>Registrar pagamento reduz o saldo automaticamente</p></div>
-        <button class="button button--primary" type="button" data-action="add-debt">Nova dívida</button>
-      </div>
+      <div class="card-header"><div><h2>Dívidas</h2><p>Pagar reduz o saldo · novas dívidas pelo botão Adicionar</p></div></div>
       ${summary.debts.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
         <th>Credor</th><th class="number">Saldo</th><th class="number">Mensal</th><th class="number">Juros/custo</th><th>Prioridade</th><th>Status</th><th></th>
       </tr></thead><tbody>
@@ -622,7 +639,7 @@ function renderDebts() {
             <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${debt.id}">Excluir</button>
           </div></td>
         </tr>`).join('')}
-      </tbody></table></div>` : emptyState('◎', 'Sem dívidas', 'Cadastre credores e saldos.', 'Nova dívida', 'add-debt')}
+      </tbody></table></div>` : emptyState('◎', 'Sem dívidas', 'Inclua pelo botão Adicionar → Dívida.')}
     </section>`;
 }
 
@@ -730,7 +747,7 @@ function openAddMenu() {
     ['reserve', 'Reserva'],
   ].map(([id, label]) => `<button class="choice-card" type="button" data-create-type="${id}"><strong>${label}</strong></button>`).join('');
   hideError(refs.dialogError);
-  refs.entityDialog.showModal();
+  showEntityDialog();
 }
 
 function openCreate(type, entry = null) {
@@ -783,9 +800,7 @@ function openCreate(type, entry = null) {
       ${categoryField(catType, entry?.category || (type === 'reserve' ? 'Reserva' : 'Outros'))}
       <label class="field span-2"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>`;
   }
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-  bindMoneyInputs(refs.entityDialog);
+  showEntityDialog();
 }
 
 function openDebtForm(debt = null) {
@@ -803,24 +818,26 @@ function openDebtForm(debt = null) {
     <label class="field span-2"><span>Status</span><select name="status">
       ${Object.entries(DEBT_STATUS_LABEL).map(([id, label]) => `<option value="${id}" ${debt?.status === id ? 'selected' : ''}>${label}</option>`).join('')}
     </select></label>`;
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-  bindMoneyInputs(refs.entityDialog);
+  showEntityDialog();
 }
 
 async function handleDialogClick(event) {
-  if (event.target.closest('[data-close-dialog]')) refs.entityDialog.close();
+  if (event.target.closest('[data-close-dialog]')) {
+    closeEntityDialog();
+    return;
+  }
   const choice = event.target.closest('[data-create-type]');
   if (choice) {
-    refs.entityDialog.close();
-    setTimeout(() => openCreate(choice.dataset.createType), 60);
+    event.preventDefault();
+    openCreate(choice.dataset.createType);
     return;
   }
   const menuAction = event.target.closest('[data-from-menu][data-action]');
   if (menuAction) {
     event.preventDefault();
-    refs.entityDialog.close();
-    setTimeout(() => handleViewClick({ target: menuAction }), 60);
+    closeEntityDialog();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await handleViewClick({ target: menuAction });
     return;
   }
   const del = event.target.closest('[data-action="confirm-delete"]');
@@ -829,8 +846,7 @@ async function handleDialogClick(event) {
     const scope = del.dataset.scope || 'one';
     const targetId = del.dataset.id;
     const kind = del.dataset.kind || 'entry';
-    refs.entityDialog.close();
-    dialogContext = null;
+    closeEntityDialog();
     await mutateImportant(async () => {
       if (kind === 'commitment') deleteCommitmentScope(state, targetId, state.currentMonth, scope);
       else deleteEntryScope(state, targetId, state.currentMonth, scope);
@@ -854,8 +870,7 @@ async function handleEntitySubmit(event) {
         const after = (entry.payments || []).reduce((sum, pay) => sum + Number(pay.amount || 0), 0);
         if (entry.debtId) applyDebtBalancePayment(state, entry.debtId, after - before);
       }, 'Pagamento registrado', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     if (dialogContext.mode === 'pay-debt') {
@@ -894,8 +909,7 @@ async function handleEntitySubmit(event) {
           });
         }
       }, 'Pagamento na dívida', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     if (dialogContext.mode === 'advance') {
@@ -908,8 +922,7 @@ async function handleEntitySubmit(event) {
         const entry = month.entries.find((item) => item.commitmentId === commitment.id && item.status !== PAY_STATUS.PAID);
         if (entry) markPaid(entry);
       }, 'Antecipado', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     if (dialogContext.mode === 'renegotiate') {
@@ -918,8 +931,7 @@ async function handleEntitySubmit(event) {
         if (!commitment) throw new Error('Compromisso não encontrado.');
         renegotiateCommitment(commitment, data);
       }, 'Renegociado', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     if (dialogContext.mode === 'create-debt' || dialogContext.mode === 'edit-debt') {
@@ -952,8 +964,7 @@ async function handleEntitySubmit(event) {
         }
         ensureMonth(state, state.currentMonth);
       }, 'Dívida salva', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     if (dialogContext.mode === 'edit-commitment') {
@@ -977,16 +988,14 @@ async function handleEntitySubmit(event) {
           if (data.startDate) commitment.startDate = data.startDate;
         }
       }, 'Compromisso atualizado', '');
-      refs.entityDialog.close();
-      dialogContext = null;
+      closeEntityDialog();
       return;
     }
     await mutateImportant(async () => {
       if (dialogContext.mode === 'edit') await saveEdit(data);
       else await saveCreate(data);
     }, 'Salvo', 'Atualizado.');
-    refs.entityDialog.close();
-    dialogContext = null;
+    closeEntityDialog();
   } catch (error) {
     showError(refs.dialogError, error.message);
   }
@@ -1200,8 +1209,7 @@ async function handleViewClick(event) {
     refs.dialogSubmit.classList.remove('hidden');
     refs.dialogFields.className = 'dialog-fields';
     refs.dialogFields.innerHTML = `<label class="field"><span>Quantidade</span><input name="count" type="number" min="1" value="1" required /></label>`;
-    hideError(refs.dialogError);
-    refs.entityDialog.showModal();
+    showEntityDialog();
     return;
   }
   if (action === 'settle-installment') {
@@ -1242,9 +1250,7 @@ async function handleViewClick(event) {
       <label class="field"><span>Total de parcelas</span><input name="totalInstallments" type="number" min="1" value="${commitment.totalInstallments || 1}" required /></label>
       <label class="field"><span>Parcela atual</span><input name="currentInstallment" type="number" min="1" value="${Math.min(commitment.currentInstallment || 1, commitment.totalInstallments || 1)}" required /></label>
       <label class="field"><span>Próximo vencimento</span><input name="nextDueDate" type="date" value="${commitment.nextDueDate || ''}" required /></label>`;
-    hideError(refs.dialogError);
-    refs.entityDialog.showModal();
-    bindMoneyInputs(refs.entityDialog);
+    showEntityDialog();
     return;
   }
   if (action === 'edit-commitment') {
@@ -1367,9 +1373,7 @@ function openPartialPay(entry) {
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
     <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>
     <p class="muted span-2" style="margin:0">Falta pagar: ${brl(pending)}</p>`;
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-  bindMoneyInputs(refs.entityDialog);
+  showEntityDialog();
 }
 
 function openDebtPay(debt) {
@@ -1384,9 +1388,7 @@ function openDebtPay(debt) {
     <label class="field"><span>Valor pago</span>${moneyInput('amount', suggested || '', { required: true })}</label>
     <label class="field"><span>Data</span><input name="date" type="date" required value="${toISODate(new Date())}" /></label>
     <label class="field span-2"><span>Forma</span><select name="method"><option>Pix</option><option>Dinheiro</option><option>Cartão</option><option>Transferência</option><option>Boleto</option></select></label>`;
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
-  bindMoneyInputs(refs.entityDialog);
+  showEntityDialog();
 }
 
 function openCommitmentMore(commitment) {
@@ -1409,8 +1411,7 @@ function openCommitmentMore(commitment) {
   actions.push(['edit-commitment', 'Editar']);
   actions.push(['delete-commitment', 'Excluir']);
   refs.dialogFields.innerHTML = actions.map(([action, label]) => `<button class="choice-card" type="button" data-action="${action}" data-id="${commitment.id}" data-from-menu="1"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
+  showEntityDialog();
 }
 
 function openDeleteScope(entry) {
@@ -1423,8 +1424,7 @@ function openDeleteScope(entry) {
     ? [['one', 'Só este mês'], ['forward', 'Este e os próximos'], ['all', 'Compromisso completo']]
     : [['one', 'Excluir este lançamento']];
   refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
+  showEntityDialog();
 }
 
 function openDeleteCommitment(commitment) {
@@ -1437,8 +1437,7 @@ function openDeleteCommitment(commitment) {
     ['forward', 'Este e os próximos'],
     ['all', 'Compromisso completo'],
   ].map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
-  hideError(refs.dialogError);
-  refs.entityDialog.showModal();
+  showEntityDialog();
 }
 
 async function handleViewSubmit(event) {
@@ -1694,9 +1693,11 @@ function confirmDialog(title, copy, actionLabel = 'Confirmar') {
     refs.confirmAction.textContent = actionLabel;
     const onClose = () => {
       refs.confirmDialog.removeEventListener('close', onClose);
+      document.body.classList.remove('dialog-open');
       resolve(refs.confirmDialog.returnValue === 'confirm');
     };
     refs.confirmDialog.addEventListener('close', onClose);
-    refs.confirmDialog.showModal();
+    document.body.classList.add('dialog-open');
+    if (!refs.confirmDialog.open) refs.confirmDialog.showModal();
   });
 }

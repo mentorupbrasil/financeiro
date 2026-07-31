@@ -468,17 +468,44 @@ a { color: inherit; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .backup-actions { display: grid; gap: 8px; }
 
-.dialog { width: min(420px, calc(100% - 20px)); max-height: min(90vh, calc(100% - 20px)); border: 0; border-radius: 16px; padding: 0; background: transparent; box-shadow: var(--shadow); }
-.dialog::backdrop { background: rgba(23,23,23,.4); backdrop-filter: blur(4px); }
-.dialog--small { width: min(380px, calc(100% - 20px)); }
-.dialog-card { max-height: inherit; overflow: auto; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); }
-.dialog-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.dialog {
+  width: min(420px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(88dvh, calc(100vh - 24px));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.dialog[open] { display: flex; flex-direction: column; }
+.dialog::backdrop { background: rgba(23,23,23,.45); }
+.dialog--small { width: min(380px, calc(100vw - 24px)); }
+.dialog-card {
+  display: flex; flex-direction: column; min-height: 0;
+  max-height: min(88dvh, calc(100vh - 24px));
+  overflow: hidden; border: 0; border-radius: 16px; background: transparent; box-shadow: none;
+}
+.dialog-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
 .dialog-header h2 { margin: 0; font-size: 1.05rem; letter-spacing: -.01em; }
-.dialog-fields { padding: 14px 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.dialog-fields {
+  padding: 14px 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  overflow: auto; min-height: 0; flex: 1 1 auto; -webkit-overflow-scrolling: touch;
+}
 .dialog-fields .span-2 { grid-column: 1 / -1; }
-.dialog-card > .muted { padding: 0 16px; }
-.dialog-card > .form-error { margin: 0 16px; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px 14px; border-top: 1px solid var(--border); }
+.dialog-card > .muted { padding: 0 16px 8px; flex: 0 0 auto; }
+.dialog-card > .form-error { margin: 0 16px 8px; flex: 0 0 auto; }
+.dialog-actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border); flex: 0 0 auto;
+}
 .dialog-fields--choices { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .choice-card {
   border: 1px solid var(--border); border-radius: 12px; background: #fff; padding: 14px 12px;
@@ -496,6 +523,7 @@ a { color: inherit; }
   letter-spacing: -.01em;
   text-align: right;
 }
+body.dialog-open { overflow: hidden; touch-action: none; }
 
 .toast-region { position: fixed; z-index: 2000; top: 84px; right: 20px; display: grid; gap: 8px; pointer-events: none; }
 .toast {
@@ -587,11 +615,27 @@ a { color: inherit; }
   .card-header, .card-body { padding-left: 14px; padding-right: 14px; }
   .secondary-metrics { grid-template-columns: 1fr 1fr; }
   .form-grid { grid-template-columns: 1fr; }
-  .dialog { width: calc(100% - 16px); max-height: calc(100% - 16px); }
+  .dialog,
+  .dialog--small {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: min(92dvh, calc(100vh - 6px));
+    margin: 0;
+    margin-top: auto;
+    border-radius: 18px 18px 0 0;
+  }
+  .dialog-card { max-height: min(92dvh, calc(100vh - 6px)); border-radius: 18px 18px 0 0; }
   .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 14px; }
   .dialog-fields .span-2 { grid-column: 1 / -1; }
   .dialog-header { padding: 12px 14px; }
-  .dialog-actions { padding: 10px 14px 12px; flex-direction: row; }
+  .dialog-header::before {
+    content: "";
+    position: absolute;
+    top: 8px; left: 50%; transform: translateX(-50%);
+    width: 36px; height: 4px; border-radius: 999px; background: #d4d4d4;
+  }
+  .dialog-header { position: relative; padding-top: 18px; }
+  .dialog-actions { padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px)); flex-direction: row; }
   .dialog-actions .button { width: auto; flex: 1; }
   .stat-strip { grid-template-columns: 1fr; }
   .stat-strip > div { border-right: 0; }
