@@ -49,7 +49,7 @@ export const DEBT_STATUS = {
 
 export const DEBT_STATUS_LABEL = {
   attack: 'Atacar',
-  interest: 'Juros',
+  interest: 'Só juros',
   frozen: 'Congelada',
   paid: 'Quitada',
   renegotiated: 'Renegociada',

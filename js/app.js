@@ -59,7 +59,6 @@ const REVISION_KEY = 'respira:sync-revision';
 const views = {
   overview: ['HOJE', 'Visão geral'],
   month: ['MÊS', 'Mês atual'],
-  commitments: ['FIXOS', 'Compromissos'],
   debts: ['DÍVIDAS', 'Dívidas'],
   history: ['PASSADO', 'Histórico'],
   settings: ['SISTEMA', 'Configurações'],
@@ -102,6 +101,7 @@ let syncRevision = 0;
 let sessionPin = '';
 let currentView = 'overview';
 let monthFilter = 'all';
+let debtFilter = 'all';
 let dialogContext = null;
 let installPrompt = null;
 let idleTimer = null;
@@ -360,6 +360,7 @@ function resetIdleTimer() {
 }
 
 function setView(view) {
+  if (view === 'commitments') view = 'debts';
   if (!views[view]) return;
   currentView = view;
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
@@ -375,7 +376,6 @@ function render() {
   const map = {
     overview: renderOverview,
     month: renderMonth,
-    commitments: renderCommitments,
     debts: renderDebts,
     history: renderHistory,
     settings: renderSettings,
@@ -532,9 +532,9 @@ function renderOrientation(data, greeting) {
     tips.push(['ok', `Há ${brl(data.free)} livres após contas, reserva e margem.`]);
   }
   if (attack) {
-    tips.push(['ok', `Fila de ataque: ${attack.creditor} · saldo ${brl(attack.balance)} · planejado ${brl(attack.plannedMonthly)}.`]);
+    tips.push(['ok', `Atacar agora: ${attack.creditor} · saldo ${brl(attack.balance)} · planejado ${brl(attack.plannedMonthly)}.`]);
   } else if ((data.debtsSummary?.debts || []).some((d) => d.status !== DEBT_STATUS.PAID)) {
-    tips.push(['ok', 'Nenhuma dívida em Atacar. Revise status em Dívidas (Juros / Congelada).']);
+    tips.push(['ok', 'Nenhuma dívida em Atacar. Revise em Dívidas (Juros / Congelada).']);
   }
   if (!tips.length) {
     tips.push(['ok', 'Mês sob controle. Marque o que entrar e pague o essencial primeiro.']);
@@ -590,9 +590,112 @@ function certaintyLabel(value) {
   return 'Prevista';
 }
 
-function renderCommitments() {
-  const rows = listCommitments(state);
-  const actionButtons = (item) => {
+function isInstallment(item) {
+  return [COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(item.type);
+}
+
+function debtModeLabel(key) {
+  const map = {
+    fixa: 'Fixa',
+    parcelada: 'Parcelada',
+    attack: 'Atacar',
+    interest: 'Só juros',
+    frozen: 'Congelada',
+    paid: 'Quitada',
+    renegotiated: 'Renegociada',
+  };
+  return map[key] || key;
+}
+
+function debtModePill(key) {
+  const tone = key === 'attack' || key === 'parcelada' ? 'danger'
+    : key === 'interest' ? 'warning'
+      : key === 'frozen' ? 'info'
+        : key === 'paid' ? 'success'
+          : key === 'fixa' ? 'neutral'
+            : 'neutral';
+  return `<span class="pill pill--${tone}">${escapeHtml(debtModeLabel(key))}</span>`;
+}
+
+function listUnifiedDebts() {
+  const commitments = listCommitments(state).map((item) => {
+    const parcelada = isInstallment(item);
+    const mode = item.paused || item.status === 'paused' ? 'frozen' : (parcelada ? 'parcelada' : 'fixa');
+    return {
+      source: 'commitment',
+      id: item.id,
+      name: item.name,
+      detail: item.category,
+      mode,
+      value: item.installmentValue || item.amount,
+      valueLabel: parcelada ? 'Parcela' : 'Mensal',
+      nextDue: item.nextDue,
+      extra: parcelada
+        ? (item.meta.finished ? 'Encerrada' : `${item.meta.current || '—'}/${item.meta.total || '—'} · falta ${item.meta.remainingCount ?? '—'} · ${brl(item.meta.remainingValue || 0)}`)
+        : (item.paused ? 'Pausada / congelada' : 'Todo mês'),
+      raw: item,
+    };
+  });
+
+  const balances = (state.debts || []).map((debt) => ({
+    source: 'debt',
+    id: debt.id,
+    name: debt.creditor,
+    detail: debt.note || DEBT_STATUS_LABEL[debt.status] || '',
+    mode: debt.status,
+    value: debt.balance,
+    valueLabel: 'Saldo',
+    monthly: debt.plannedMonthly,
+    nextDue: '',
+    extra: debt.status === DEBT_STATUS.INTEREST
+      ? `Juros/mês ${brl(debt.plannedMonthly || debt.monthlyCost || 0)}`
+      : debt.status === DEBT_STATUS.ATTACK
+        ? `Planejado ${brl(debt.plannedMonthly)} · prioridade ${debt.priority}`
+        : debt.status === DEBT_STATUS.FROZEN
+          ? 'Sem pagamento por enquanto'
+          : DEBT_STATUS_LABEL[debt.status] || '',
+    raw: debt,
+  }));
+
+  return [...commitments, ...balances].toSorted((a, b) => {
+    const order = { attack: 0, interest: 1, parcelada: 2, fixa: 3, frozen: 4, renegotiated: 5, paid: 6 };
+    return (order[a.mode] ?? 9) - (order[b.mode] ?? 9) || a.name.localeCompare(b.name);
+  });
+}
+
+function renderDebts() {
+  const rows = listUnifiedDebts().filter((row) => {
+    if (debtFilter === 'all') return row.mode !== 'paid';
+    if (debtFilter === 'fixa') return row.mode === 'fixa';
+    if (debtFilter === 'parcelada') return row.mode === 'parcelada';
+    if (debtFilter === 'attack') return row.mode === 'attack';
+    if (debtFilter === 'interest') return row.mode === 'interest';
+    if (debtFilter === 'frozen') return row.mode === 'frozen';
+    return true;
+  });
+
+  const openBalances = (state.debts || []).filter((d) => d.status !== DEBT_STATUS.PAID);
+  const balanceTotal = openBalances.reduce((sum, d) => sum + Number(d.balance || 0), 0);
+  const parcelRemaining = listCommitments(state)
+    .filter((c) => isInstallment(c) && !c.meta.finished)
+    .reduce((sum, c) => sum + Number(c.meta.remainingValue || 0), 0);
+  const monthlyFixed = listCommitments(state)
+    .filter((c) => !isInstallment(c) && !c.paused && c.status !== 'finished')
+    .reduce((sum, c) => sum + Number(c.amount || 0), 0);
+  const monthlyAttack = openBalances
+    .filter((d) => d.status === DEBT_STATUS.ATTACK || d.status === DEBT_STATUS.INTEREST)
+    .reduce((sum, d) => sum + Number(d.plannedMonthly || 0), 0);
+
+  const filters = [
+    ['all', 'Tudo'],
+    ['fixa', 'Fixas'],
+    ['parcelada', 'Parceladas'],
+    ['attack', 'Atacar'],
+    ['interest', 'Juros'],
+    ['frozen', 'Congeladas'],
+  ];
+
+  const commitmentActions = (item) => {
     const buttons = [];
     if (isInstallment(item) && !item.meta.finished) {
       buttons.push(`<button class="button button--primary button--tiny" type="button" data-action="pay-installment" data-id="${item.id}">Pagar</button>`);
@@ -600,75 +703,66 @@ function renderCommitments() {
     buttons.push(`<button class="button button--ghost button--tiny" type="button" data-action="commitment-more" data-id="${item.id}">Mais</button>`);
     return buttons.join('');
   };
-  return `<section class="card">
-    <div class="card-header"><div><h2>Compromissos</h2><p>Use Adicionar no topo para contas fixas ou parcelas</p></div></div>
-    ${rows.length ? `
-      <div class="table-wrap commitments-table"><table class="data-table"><thead><tr><th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Status</th><th>Vence</th><th>Parcelas</th><th class="number">Restante</th><th></th></tr></thead><tbody>
-      ${rows.map((item) => `<tr>
-        <td><div class="table-title">${escapeHtml(item.name)}</div><div class="table-subtitle">${escapeHtml(item.category)}</div></td>
-        <td>${escapeHtml(item.typeLabel)}</td>
-        <td class="number">${brl(item.installmentValue || item.amount)}</td>
-        <td>${escapeHtml(item.statusLabel)}</td>
-        <td>${formatDateBR(item.nextDue)}</td>
-        <td>${item.meta.finished ? 'Encerrado' : (item.meta.total ? `${item.meta.current}/${item.meta.total}` : '—')}</td>
-        <td class="number">${item.meta.remainingCount == null ? '—' : `${item.meta.remainingCount} · ${brl(item.meta.remainingValue)}`}</td>
-        <td><div class="row-actions">${actionButtons(item)}</div></td>
-      </tr>`).join('')}
-    </tbody></table></div>
-    <div class="commitment-cards">
-      ${rows.map((item) => `<div class="commitment-card">
-        <div class="commitment-card__top">
-          <div>
-            <strong>${escapeHtml(item.name)}</strong>
-            <div class="commitment-card__meta">${escapeHtml(item.typeLabel)} · ${escapeHtml(item.statusLabel)} · Vence ${formatDateBR(item.nextDue)}${item.meta.total ? ` · ${item.meta.current}/${item.meta.total}` : ''}</div>
-          </div>
-          <div class="list-value">${brl(item.installmentValue || item.amount)}</div>
-        </div>
-        <div class="commitment-card__actions">${actionButtons(item)}</div>
-      </div>`).join('')}
-    </div>` : emptyState('◎', 'Sem compromissos', 'Inclua pelo botão Adicionar no topo.')}
-  </section>`;
-}
 
-function isInstallment(item) {
-  return [COMMITMENT_TYPES.INSTALLMENT, COMMITMENT_TYPES.FINANCING, COMMITMENT_TYPES.AGREEMENT].includes(item.type);
-}
-
-function renderDebts() {
-  const summary = debtsSummary(state);
-  const attack = summary.debts
-    .filter((d) => d.status === DEBT_STATUS.ATTACK && d.balance > 0)
-    .toSorted((a, b) => a.priority - b.priority || b.monthlyCost - a.monthlyCost);
   return `
-    <section class="grid grid--4">
-      ${metric('Saldo total', summary.totalBalance, 'negative')}
-      ${metric('Já pago', summary.totalPaid, 'positive')}
-      ${metric('Planejado no mês', summary.plannedMonth)}
-      ${metric('Fundo congeladas', summary.frozenFundAccumulated)}
+    <div class="callout">
+      <div class="callout-icon">◈</div>
+      <div>
+        <strong>Tudo aqui é dívida — o que muda é o jeito de pagar</strong>
+        <p>Fixa = todo mês (internet). Parcelada = em X vezes. Atacar = quando sobrar. Só juros = mínimo. Congelada = não paga agora.</p>
+      </div>
+    </div>
+
+    <section class="grid grid--4 section-gap">
+      ${metric('Saldos abertos', balanceTotal, balanceTotal ? 'negative' : '')}
+      ${metric('Parcelas restantes', parcelRemaining, parcelRemaining ? 'negative' : '')}
+      ${metric('Fixas no mês', monthlyFixed)}
+      ${metric('Atacar / juros no mês', monthlyAttack)}
     </section>
-    ${attack.length ? `<div class="callout section-gap"><div class="callout-icon">◈</div><div>
-      <strong>Fila de ataque</strong>
-      <p>Foque em uma por vez. Agora: <strong>${escapeHtml(attack[0].creditor)}</strong> · ${brl(attack[0].balance)}. Juros = só o mínimo. Congelada = não pague agora.</p>
-    </div></div>` : ''}
+
+    <div class="segmented section-gap" role="tablist" aria-label="Filtrar dívidas">
+      ${filters.map(([id, label]) => `<button class="segmented__item ${debtFilter === id ? 'is-active' : ''}" type="button" role="tab" aria-selected="${debtFilter === id}" data-action="debt-filter" data-id="${id}"><span>${label}</span></button>`).join('')}
+    </div>
+
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Dívidas</h2><p>Credores com saldo (cartão, banco, acordo). Parcelas de compra ficam em Compromissos.</p></div></div>
-      ${summary.debts.length ? `<div class="table-wrap"><table class="data-table"><thead><tr>
-        <th>Credor</th><th class="number">Saldo</th><th class="number">Mensal</th><th class="number">Juros/custo</th><th>Prioridade</th><th>Status</th><th></th>
-      </tr></thead><tbody>
-        ${summary.debts.map((debt) => `<tr class="${debt.status === DEBT_STATUS.ATTACK ? 'debt-row--attack' : ''}">
-          <td><div class="table-title">${escapeHtml(debt.creditor)}</div><div class="table-subtitle">${escapeHtml(debt.note || '')}</div></td>
-          <td class="number">${brl(debt.balance)}</td>
-          <td class="number">${brl(debt.plannedMonthly)}</td>
-          <td class="number">${brl(debt.monthlyCost)}</td>
-          <td>${debt.priority}</td>
-          <td><span class="pill pill--${debt.status === DEBT_STATUS.ATTACK ? 'danger' : debt.status === DEBT_STATUS.PAID ? 'success' : debt.status === DEBT_STATUS.INTEREST ? 'warning' : debt.status === DEBT_STATUS.FROZEN ? 'info' : 'neutral'}">${escapeHtml(DEBT_STATUS_LABEL[debt.status] || debt.status)}</span></td>
-          <td><div class="row-actions">
-            ${debt.status !== DEBT_STATUS.PAID ? `<button class="button button--primary button--tiny" type="button" data-action="pay-debt" data-id="${debt.id}">Pagar</button>` : ''}
-            <button class="button button--ghost button--tiny" type="button" data-action="edit-debt" data-id="${debt.id}">Editar</button>
-            <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${debt.id}">Excluir</button>
-          </div></td>
-        </tr>`).join('')}
-      </tbody></table></div>` : emptyState('◈', 'Nenhuma dívida cadastrada', 'Use Adicionar → Dívida para credores com saldo. Compras parceladas aparecem em Compromissos e no Mês.', 'Adicionar dívida', 'add-debt')}
+      <div class="card-header"><div><h2>Suas dívidas</h2><p>Adicionar no topo · Conta fixa, Parcelada ou Saldo aberto</p></div></div>
+      ${rows.length ? `
+        <div class="table-wrap commitments-table"><table class="data-table"><thead><tr>
+          <th>Nome</th><th>Tipo</th><th class="number">Valor</th><th>Detalhe</th><th>Vence</th><th></th>
+        </tr></thead><tbody>
+          ${rows.map((row) => `<tr class="${row.mode === 'attack' ? 'debt-row--attack' : ''}">
+            <td><div class="table-title">${escapeHtml(row.name)}</div><div class="table-subtitle">${escapeHtml(row.detail || '')}</div></td>
+            <td>${debtModePill(row.mode)}</td>
+            <td class="number">${brl(row.value)}<div class="table-subtitle">${escapeHtml(row.valueLabel)}</div></td>
+            <td>${escapeHtml(row.extra || '—')}</td>
+            <td>${row.nextDue ? formatDateBR(row.nextDue) : '—'}</td>
+            <td><div class="row-actions">
+              ${row.source === 'commitment' ? commitmentActions(row.raw) : `
+                ${row.mode !== 'paid' ? `<button class="button button--primary button--tiny" type="button" data-action="pay-debt" data-id="${row.id}">Pagar</button>` : ''}
+                <button class="button button--ghost button--tiny" type="button" data-action="edit-debt" data-id="${row.id}">Editar</button>
+                <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${row.id}">Excluir</button>
+              `}
+            </div></td>
+          </tr>`).join('')}
+        </tbody></table></div>
+        <div class="commitment-cards">
+          ${rows.map((row) => `<div class="commitment-card">
+            <div class="commitment-card__top">
+              <div>
+                <strong>${escapeHtml(row.name)}</strong>
+                <div class="commitment-card__meta">${debtModePill(row.mode)} · ${escapeHtml(row.extra || '')}${row.nextDue ? ` · Vence ${formatDateBR(row.nextDue)}` : ''}</div>
+              </div>
+              <div class="list-value">${brl(row.value)}<small>${escapeHtml(row.valueLabel)}</small></div>
+            </div>
+            <div class="commitment-card__actions">
+              ${row.source === 'commitment' ? commitmentActions(row.raw) : `
+                ${row.mode !== 'paid' ? `<button class="button button--primary button--tiny" type="button" data-action="pay-debt" data-id="${row.id}">Pagar</button>` : ''}
+                <button class="button button--ghost button--tiny" type="button" data-action="edit-debt" data-id="${row.id}">Editar</button>
+                <button class="button button--ghost button--tiny" type="button" data-action="delete-debt" data-id="${row.id}">Excluir</button>
+              `}
+            </div>
+          </div>`).join('')}
+        </div>` : emptyState('◈', 'Nenhuma dívida neste filtro', 'Internet = Conta fixa. Compra em X vezes = Parcelada. Empréstimo/agiota/amigo = Saldo aberto (Atacar, Juros ou Congelada).')}
     </section>`;
 }
 
@@ -837,15 +931,19 @@ function openDebtForm(debt = null) {
   refs.dialogSubmit.classList.remove('hidden');
   refs.dialogFields.className = 'dialog-fields';
   refs.dialogEyebrow.textContent = debt ? 'EDITAR' : 'NOVA';
-  refs.dialogTitle.textContent = debt ? debt.creditor : 'Dívida';
+  refs.dialogTitle.textContent = debt ? debt.creditor : 'Saldo aberto';
   refs.dialogFields.innerHTML = `
-    <label class="field span-2"><span>Credor</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" /></label>
+    <label class="field span-2"><span>Credor / nome</span><input name="creditor" required value="${escapeHtml(debt?.creditor || '')}" placeholder="Ex.: Agiota, banco, amigo" /></label>
     <label class="field"><span>Saldo</span>${moneyInput('balance', debt?.balance ?? '', { required: true })}</label>
-    <label class="field"><span>Mensal</span>${moneyInput('plannedMonthly', debt?.plannedMonthly ?? '', { required: true })}</label>
+    <label class="field"><span>Valor do mês</span>${moneyInput('plannedMonthly', debt?.plannedMonthly ?? '', { required: true })}</label>
     <label class="field"><span>Juros/custo</span>${moneyInput('monthlyCost', debt?.monthlyCost ?? 0)}</label>
     <label class="field"><span>Prioridade</span><input name="priority" type="number" min="1" max="10" value="${debt?.priority ?? 3}" /></label>
-    <label class="field span-2"><span>Status</span><select name="status">
-      ${Object.entries(DEBT_STATUS_LABEL).map(([id, label]) => `<option value="${id}" ${debt?.status === id ? 'selected' : ''}>${label}</option>`).join('')}
+    <label class="field span-2"><span>Como tratar</span><select name="status">
+      <option value="attack" ${!debt || debt?.status === 'attack' ? 'selected' : ''}>Atacar — pago quando sobrar</option>
+      <option value="interest" ${debt?.status === 'interest' ? 'selected' : ''}>Só juros — mínimo mensal</option>
+      <option value="frozen" ${debt?.status === 'frozen' ? 'selected' : ''}>Congelada — não pago agora</option>
+      <option value="paid" ${debt?.status === 'paid' ? 'selected' : ''}>Quitada</option>
+      <option value="renegotiated" ${debt?.status === 'renegotiated' ? 'selected' : ''}>Renegociada</option>
     </select></label>`;
   showEntityDialog();
 }
@@ -1182,6 +1280,7 @@ async function handleViewClick(event) {
   const entry = month.entries.find((item) => item.id === id);
 
   if (action === 'filter') { monthFilter = id; render(); return; }
+  if (action === 'debt-filter') { debtFilter = id; render(); return; }
   if (action === 'open-add') return openAddMenu();
   if (action === 'add-debt') return openDebtForm();
   if (action === 'conflict-use-cloud') return resolveConflictCloud();
