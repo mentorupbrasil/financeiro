@@ -242,6 +242,26 @@ export function calculateMonth(state, monthKey = state.currentMonth) {
     actionText = `Sua folga mínima está protegida. Separe ${money(spendBudget)} para os envelopes, ${money(saveBudget)} para guardar e use ${money(debtAttack)} para antecipar metas ou reforçar a reserva.`;
   }
 
+  const flexibleBills = month.bills
+    .filter((item) => !item.essential && item.amount > 0)
+    .toSorted((a, b) => b.amount - a.amount);
+  const flexibleTotal = sum(flexibleBills, (item) => item.amount);
+  const interestDebts = month.debts.filter((item) => item.status === STATUS.INTEREST && item.balance > 0);
+  const frozenDebts = month.debts.filter((item) => item.status === STATUS.FROZEN && item.balance > 0);
+
+  // Liberdade operacional: folga mínima + sobra suficiente para zerar dívidas ATACAR em até 24 meses.
+  const monthlyFreedomNeed = minimumBuffer + (attackDebt > 0 ? attackDebt / 24 : 0);
+  const tripsToFreedom = needsRate
+    ? Math.max(0, Math.ceil((plannedOut + monthlyFreedomNeed - nonDailyIncome) / dailyRate))
+    : null;
+  const tripsExtraForFreedom = tripsToFreedom == null ? null : Math.max(0, tripsToFreedom - dailyCount);
+  const extraTripValue = dailyRate;
+  const extraTripSplit = {
+    spend: extraTripValue * fractions.spend,
+    save: extraTripValue * fractions.save,
+    debt: extraTripValue * fractions.debt,
+  };
+
   return {
     monthKey,
     month,
@@ -277,11 +297,148 @@ export function calculateMonth(state, monthKey = state.currentMonth) {
     tripsToClose,
     tripsToBreathe,
     tripsMissing,
+    tripsToFreedom,
+    tripsExtraForFreedom,
+    extraTripValue,
+    extraTripSplit,
+    flexibleBills,
+    flexibleTotal,
+    interestDebts,
+    frozenDebts,
     status,
     statusTitle,
     nextDebt,
     actionText,
   };
+}
+
+/** Orientação prática do mês: onde cortar, o que pode gastar, dívidas e viagens. */
+export function buildGuidance(state, monthKey = state.currentMonth) {
+  const calc = calculateMonth(state, monthKey);
+  const tips = [];
+  const cuts = calc.flexibleBills.slice(0, 5).map((bill) => ({
+    name: bill.name,
+    amount: bill.amount,
+    category: bill.category,
+    tip: bill.amount >= 100
+      ? `Candidata forte a corte ou renegociação (${money(bill.amount)}/mês).`
+      : `Revise se ainda é necessária; economizar ${money(bill.amount)} libera espaço no envelope.`,
+  }));
+
+  if (!calc.month.incomes.length) {
+    tips.push({ level: 'danger', title: 'Sem renda cadastrada', body: 'Cadastre salário e diárias antes de qualquer decisão de gasto.' });
+  } else if (calc.status === 'deficit') {
+    tips.push({
+      level: 'danger',
+      title: 'Mês em déficit',
+      body: `Faltam ${moneyAbs(calc.rawSurplus)}. Corte contas flexíveis (${money(calc.flexibleTotal)} no total), não gaste envelopes e busque ${calc.tripsMissing > 0 ? `${calc.tripsMissing} diária(s) a mais` : 'renda extra'} antes de atacar dívidas congeladas.`,
+    });
+  } else if (calc.status === 'tight') {
+    tips.push({
+      level: 'warning',
+      title: 'Fecha apertado',
+      body: `Proteja a folga de ${money(calc.minimumBuffer)} antes de qualquer gasto livre. Envelopes ficam em zero até sobrar.`,
+    });
+  } else {
+    tips.push({
+      level: 'ok',
+      title: 'Pode respirar com regra',
+      body: `Este mês você pode gastar até ${money(calc.spendBudget)} livres (${money(calc.envelopeLimit)}/semana). Guarde ${money(calc.saveBudget)} e ataque dívidas com ${money(calc.debtAttack)}.`,
+    });
+  }
+
+  if (cuts.length && (calc.status !== 'breathe' || calc.flexibleTotal > calc.spendBudget)) {
+    tips.push({
+      level: 'warning',
+      title: 'Onde economizar agora',
+      body: `Foque nas contas flexíveis: ${cuts.slice(0, 3).map((item) => `${item.name} (${money(item.amount)})`).join(', ')}. Contas essenciais só depois de negociar ou trocar plano.`,
+    });
+  }
+
+  if (calc.nextDebt) {
+    tips.push({
+      level: 'ok',
+      title: `Ataque: ${calc.nextDebt.creditor}`,
+      body: `Uma dívida por vez. Planeje ${money(Math.min(calc.debtAttack || calc.nextDebt.plannedPayment, calc.nextDebt.balance))} neste mês. Dívidas CONGELADAS não entram na fila — não misture.`,
+    });
+  }
+
+  if (calc.frozenDebts.length) {
+    tips.push({
+      level: 'info',
+      title: 'Dívidas que você não paga agora',
+      body: `${calc.frozenDebts.length} congelada(s) (${money(calc.frozenDebt)}). Mantenha assim até negociar ou até limpar a fila ATACAR. Não use dinheiro livre nelas.`,
+    });
+  }
+
+  if (calc.interestDebts.length) {
+    tips.push({
+      level: 'warning',
+      title: 'Juros em dia',
+      body: `Em JUROS, pague só o custo mínimo mensal para não explodir. O ataque de sobra continua na fila ATACAR.`,
+    });
+  }
+
+  if (calc.dailyRate > 0) {
+    const extra = calc.tripsExtraForFreedom ?? 0;
+    tips.push({
+      level: extra > 0 ? 'info' : 'ok',
+      title: extra > 0 ? `Aumente ${extra} viagem(ns) no mês` : 'Viagens no caminho da liberdade',
+      body: extra > 0
+        ? `Hoje: ${calc.dailyCount} diária(s). Para fechar: ${calc.tripsToClose}. Para respirar: ${calc.tripsToBreathe}. Para liberdade operacional (reserva + quitar ataque em ~24 meses): ${calc.tripsToFreedom}. Cada diária extra de ${money(calc.extraTripValue)} vira ~${money(calc.extraTripSplit.debt)} em ataque e ~${money(calc.extraTripSplit.save)} guardado.`
+        : `Com ${calc.dailyCount} diária(s) você já cobre o ritmo de liberdade operacional. Cada diária extra ainda acelera: ~${money(calc.extraTripSplit.debt)} em dívidas e ~${money(calc.extraTripSplit.save)} guardado.`,
+    });
+  } else {
+    tips.push({
+      level: 'info',
+      title: 'Cadastre o valor da diária',
+      body: 'Com uma entrada do tipo diária/viagem, o sistema calcula quantas viagens faltam para fechar, respirar e conquistar folga real.',
+    });
+  }
+
+  if (calc.envelopeSpent > calc.spendBudget && calc.spendBudget > 0) {
+    tips.push({
+      level: 'danger',
+      title: 'Envelope estourado',
+      body: `Você já gastou ${money(calc.envelopeSpent)} do limite livre de ${money(calc.spendBudget)}. Pare gastos livres até o próximo mês.`,
+    });
+  }
+
+  const spendPlan = {
+    monthLimit: calc.spendBudget,
+    weekLimit: calc.envelopeLimit,
+    dayLimit: calc.spendBudget / 30,
+    remaining: calc.envelopeRemaining,
+    saveTarget: calc.saveBudget,
+    debtTarget: calc.debtAttack,
+    canSpendFreely: calc.status === 'breathe' && calc.envelopeRemaining > 0,
+  };
+
+  const debtPlan = {
+    next: calc.nextDebt,
+    attackTotal: calc.attackDebt,
+    frozenTotal: calc.frozenDebt,
+    interestCount: calc.interestDebts.length,
+    frozenCount: calc.frozenDebts.length,
+    rule: 'ATACAR recebe a sobra; JUROS paga só o mínimo; CONGELADA espera — é a dívida que você ainda não paga.',
+  };
+
+  const freedomPlan = {
+    tripsNow: calc.dailyCount,
+    tripsToClose: calc.tripsToClose,
+    tripsToBreathe: calc.tripsToBreathe,
+    tripsToFreedom: calc.tripsToFreedom,
+    tripsExtra: calc.tripsExtraForFreedom,
+    dailyRate: calc.dailyRate,
+    extraTripSplit: calc.extraTripSplit,
+    headline: calc.tripsExtraForFreedom == null
+      ? 'Cadastre diárias para montar o plano de viagens.'
+      : calc.tripsExtraForFreedom > 0
+        ? `Faça ${calc.tripsExtraForFreedom} diária(s) a mais neste mês para acelerar a saída da dívida.`
+        : 'Suas viagens já sustentam o ritmo de liberdade operacional. Mantenha a disciplina dos envelopes.',
+  };
+
+  return { tips, cuts, spendPlan, debtPlan, freedomPlan, calc };
 }
 
 function money(value) {
@@ -295,15 +452,21 @@ function moneyAbs(value) {
 export function scenarios(state, monthKey = state.currentMonth, maxTrips = 10) {
   const calc = calculateMonth(state, monthKey);
   const rate = calc.dailyRate;
+  const fractions = calc.fractions;
   return Array.from({ length: maxTrips + 1 }, (_, trips) => {
     const income = calc.nonDailyIncome + rate * trips;
     const surplus = income - calc.plannedOut;
+    const distributable = Math.max(0, surplus - calc.minimumBuffer);
     return {
       trips,
       income,
       surplus,
+      spend: distributable * fractions.spend,
+      save: distributable * fractions.save,
+      debt: distributable * fractions.debt,
       status: surplus < 0 ? 'deficit' : surplus < calc.minimumBuffer ? 'tight' : 'breathe',
       current: trips === calc.dailyCount,
+      freedom: calc.tripsToFreedom != null && trips >= calc.tripsToFreedom,
     };
   });
 }
@@ -329,6 +492,7 @@ export function projection(state, startMonth = state.currentMonth, length = 24) 
   const baseMonth = structuredClone(state.months[startMonth] || emptyMonth());
   const debts = baseMonth.debts.map((item) => ({ ...item }));
   const rows = [];
+  let debtFreeAt = null;
 
   for (let index = 0; index < length; index += 1) {
     const monthKey = addMonths(startMonth, index);
@@ -369,6 +533,10 @@ export function projection(state, startMonth = state.currentMonth, length = 24) 
       }
     }
 
+    const remainingDebt = sum(debts.filter((item) => item.status !== STATUS.PAID), (item) => item.balance);
+    const remainingAttack = sum(debts.filter((item) => item.status === STATUS.ATTACK && item.balance > 0), (item) => item.balance);
+    if (debtFreeAt == null && remainingAttack <= 0) debtFreeAt = monthKey;
+
     rows.push({
       monthKey,
       income: calc.totalIncome,
@@ -377,11 +545,12 @@ export function projection(state, startMonth = state.currentMonth, length = 24) 
       spend: calc.spendBudget,
       save: calc.saveBudget,
       debtAttack: debtPaid,
-      remainingDebt: sum(debts.filter((item) => item.status !== STATUS.PAID), (item) => item.balance),
+      remainingDebt,
+      remainingAttack,
       status: calc.status,
     });
   }
-  return rows;
+  return { rows, debtFreeAt, totalSaved: rows.reduce((total, row) => total + row.save, 0) };
 }
 
 export function closeCurrentMonth(state) {

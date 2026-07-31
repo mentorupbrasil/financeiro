@@ -1,4 +1,4 @@
-const CACHE = 'respira-v1';
+const CACHE = 'respira-v2';
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.webmanifest', './assets/icon.svg',
   './js/app.js', './js/storage.js', './js/model.js', './js/templates.js'

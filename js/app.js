@@ -1,6 +1,7 @@
 import {
   STATUS,
   addMonths,
+  buildGuidance,
   calculateMonth,
   closeCurrentMonth,
   createEmptyState,
@@ -243,6 +244,7 @@ function render() {
 
 function renderDashboard() {
   const calc = calculateMonth(state);
+  const guide = buildGuidance(state);
   const upcoming = dueBills(state);
   const scenarioRows = scenarios(state);
   const statusConfig = {
@@ -255,6 +257,7 @@ function renderDashboard() {
     .filter((debt) => debt.status !== STATUS.PAID && debt.balance > 0)
     .toSorted((a, b) => (a.status === STATUS.ATTACK ? 0 : 1) - (b.status === STATUS.ATTACK ? 0 : 1) || a.priority - b.priority)
     .slice(0, 4);
+  const tipLevelClass = { danger: 'callout--danger', warning: 'callout--warning', ok: '', info: 'callout--info' };
 
   return `
     <div class="grid grid--dashboard">
@@ -272,9 +275,11 @@ function renderDashboard() {
           <div class="hero-action">
             ${calc.tripsToBreathe == null
               ? 'Cadastre uma entrada do tipo “diária/viagem” para calcular quantas você precisa fazer.'
-              : calc.tripsMissing > 0
-                ? `<strong>Próximo movimento:</strong> planejar mais ${number(calc.tripsMissing)} diária(s) para proteger a folga mínima.`
-                : '<strong>Próximo movimento:</strong> executar o plano e não misturar o dinheiro dos envelopes com contas.'}
+              : calc.tripsExtraForFreedom > 0
+                ? `<strong>Próximo movimento:</strong> ${escapeHtml(guide.freedomPlan.headline)}`
+                : calc.tripsMissing > 0
+                  ? `<strong>Próximo movimento:</strong> planejar mais ${number(calc.tripsMissing)} diária(s) para proteger a folga mínima.`
+                  : '<strong>Próximo movimento:</strong> executar o plano e não misturar o dinheiro dos envelopes com contas.'}
           </div>
         </div>
       </section>
@@ -294,6 +299,38 @@ function renderDashboard() {
       </section>
     </div>
 
+    <section class="card section-gap">
+      <div class="card-header"><div><h2>Orientação do mês</h2><p>O que fazer agora para sair da dívida e controlar o gasto.</p></div></div>
+      <div class="card-body grid grid--2">
+        <div class="grid coach-stack">
+          ${guide.tips.map((tip) => `<div class="callout ${tipLevelClass[tip.level] || ''}"><div class="callout-icon">${tip.level === 'danger' ? '!' : tip.level === 'ok' ? '✓' : 'i'}</div><div><strong>${escapeHtml(tip.title)}</strong><p>${escapeHtml(tip.body)}</p></div></div>`).join('')}
+        </div>
+        <div class="grid">
+          <div class="spend-board">
+            <p class="eyebrow">O QUE VOCÊ PODE GASTAR</p>
+            <div class="stat-strip">
+              <div><span>No mês</span><strong class="${guide.spendPlan.canSpendFreely ? 'positive' : ''}">${brl(guide.spendPlan.monthLimit)}</strong></div>
+              <div><span>Por semana</span><strong>${brl(guide.spendPlan.weekLimit)}</strong></div>
+              <div><span>Ainda livre</span><strong class="${guide.spendPlan.remaining < 0 ? 'negative' : ''}">${brl(guide.spendPlan.remaining)}</strong></div>
+            </div>
+            <p class="muted coach-note">${guide.spendPlan.canSpendFreely
+              ? `Média de ${brl(guide.spendPlan.dayLimit)}/dia sem mexer em conta, reserva ou dívida. Guarde ${brl(guide.spendPlan.saveTarget)} e ataque com ${brl(guide.spendPlan.debtTarget)}.`
+              : 'Ainda não há dinheiro livre seguro. Feche o déficit ou complete a folga mínima antes de gastar.'}</p>
+          </div>
+          <div class="spend-board">
+            <p class="eyebrow">VIAGENS → LIBERDADE</p>
+            <div class="stat-strip">
+              <div><span>Agora</span><strong>${number(guide.freedomPlan.tripsNow)}</strong></div>
+              <div><span>Respirar</span><strong>${guide.freedomPlan.tripsToBreathe == null ? '—' : number(guide.freedomPlan.tripsToBreathe)}</strong></div>
+              <div><span>Liberdade</span><strong>${guide.freedomPlan.tripsToFreedom == null ? '—' : number(guide.freedomPlan.tripsToFreedom)}</strong></div>
+            </div>
+            <p class="muted coach-note">${escapeHtml(guide.freedomPlan.headline)}</p>
+          </div>
+          ${guide.cuts.length ? `<div class="spend-board"><p class="eyebrow">ONDE ECONOMIZAR</p><div class="list">${guide.cuts.map((cut) => `<div class="list-item"><div class="list-main"><strong>${escapeHtml(cut.name)}</strong><small>${escapeHtml(cut.category)} · ${escapeHtml(cut.tip)}</small></div><div class="list-value">${brl(cut.amount)}</div></div>`).join('')}</div></div>` : ''}
+        </div>
+      </div>
+    </section>
+
     <section class="grid grid--4 section-gap">
       ${metricCard('Entradas planejadas', calc.totalIncome, '↗', `${brl(calc.receivedIncome)} já recebido`, 'positive')}
       ${metricCard('Saídas planejadas', calc.plannedOut, '▤', `${brl(calc.paidOut)} já pago`)}
@@ -303,18 +340,20 @@ function renderDashboard() {
 
     <section class="grid grid--2 section-gap">
       <div class="card">
-        <div class="card-header"><div><h2>Quantas diárias precisa?</h2><p>Comparação entre fechar o mês e realmente respirar.</p></div><button class="button button--ghost" type="button" data-action="add-income">Editar renda</button></div>
+        <div class="card-header"><div><h2>Quantas diárias precisa?</h2><p>Fechar · respirar · liberdade (reserva + ritmo de quitação).</p></div><button class="button button--ghost" type="button" data-action="add-income">Editar renda</button></div>
         <div class="stat-strip">
           <div><span>Planejadas</span><strong>${number(calc.dailyCount)}</strong></div>
           <div><span>Para fechar</span><strong>${calc.tripsToClose == null ? '—' : number(calc.tripsToClose)}</strong></div>
           <div><span>Para respirar</span><strong>${calc.tripsToBreathe == null ? '—' : number(calc.tripsToBreathe)}</strong></div>
+          <div><span>Liberdade</span><strong>${calc.tripsToFreedom == null ? '—' : number(calc.tripsToFreedom)}</strong></div>
         </div>
         <div class="card-body">
           <div class="scenario-grid">
-            ${scenarioRows.map((row) => `<div class="scenario-card ${row.current ? 'current' : ''} ${row.surplus < 0 ? 'negative' : 'positive'}">
+            ${scenarioRows.map((row) => `<div class="scenario-card ${row.current ? 'current' : ''} ${row.freedom ? 'freedom' : ''} ${row.surplus < 0 ? 'negative' : 'positive'}" title="Livre ${brl(row.spend)} · Guardar ${brl(row.save)} · Dívida ${brl(row.debt)}">
               <strong>${row.trips}</strong><small>diárias</small><div class="scenario-value">${brl(row.surplus, true)}</div>
             </div>`).join('')}
           </div>
+          ${calc.dailyRate > 0 ? `<p class="muted coach-note">Cada diária extra de ${brl(calc.extraTripValue)}: ~${brl(calc.extraTripSplit.spend)} livre, ~${brl(calc.extraTripSplit.save)} guardado, ~${brl(calc.extraTripSplit.debt)} em ataque.</p>` : ''}
         </div>
       </div>
 
@@ -336,7 +375,7 @@ function renderDashboard() {
         <div class="card-body">
           ${attackList.length ? `<div class="list">${attackList.map((debt, index) => `<div class="list-item">
             <div class="list-icon">${index + 1}</div>
-            <div class="list-main"><strong>${escapeHtml(debt.creditor)}</strong><small>Prioridade ${debt.priority} · ${debt.status === STATUS.ATTACK ? 'recebe a sobra' : 'aguarda negociação'}</small></div>
+            <div class="list-main"><strong>${escapeHtml(debt.creditor)}</strong><small>Prioridade ${debt.priority} · ${debt.status === STATUS.ATTACK ? 'recebe a sobra' : debt.status === STATUS.FROZEN ? 'não paga agora' : 'aguarda'}</small></div>
             <div class="list-value">${brl(debt.balance)}<small>${statusPill(debt.status)}</small></div>
           </div>`).join('')}</div>` : emptyState('◎', 'Nenhuma dívida ativa', 'Cadastre dívidas para montar a ordem de ataque.', 'Adicionar dívida', 'add-debt')}
         </div>
@@ -390,13 +429,22 @@ function renderBills() {
 
 function renderDebts() {
   const calc = calculateMonth(state);
+  const guide = buildGuidance(state);
   const rows = calc.month.debts.toSorted((a, b) => (a.status === STATUS.PAID) - (b.status === STATUS.PAID) || a.priority - b.priority || a.balance - b.balance);
   return `<div class="grid">
     <section class="grid grid--4">
       ${metricCard('Saldo total', calc.debtTotal, '◎', 'Todas as dívidas ativas')}
       ${metricCard('Para atacar', calc.attackDebt, '→', 'Fila de quitação')}
-      ${metricCard('Congeladas', calc.frozenDebt, '❄', 'Aguardar negociação')}
+      ${metricCard('Congeladas', calc.frozenDebt, '❄', 'Ainda não paga agora')}
       ${metricCard('Pago neste mês', calc.paidDebtTotal, '✓', 'Baixa no fechamento', 'positive')}
+    </section>
+    <section class="card">
+      <div class="card-header"><div><h2>Como tratar cada dívida</h2><p>${escapeHtml(guide.debtPlan.rule)}</p></div></div>
+      <div class="card-body grid grid--3">
+        <div class="callout"><div class="callout-icon">1</div><div><strong>ATACAR</strong><p>Recebe a sobra do mês. Uma por vez, menor saldo ou maior prioridade. É a saída da dívida.</p></div></div>
+        <div class="callout callout--warning"><div class="callout-icon">%</div><div><strong>JUROS</strong><p>Pague só o custo mínimo mensal para não explodir. Não jogue a sobra aqui enquanto houver fila ATACAR.</p></div></div>
+        <div class="callout callout--info"><div class="callout-icon">❄</div><div><strong>CONGELADA</strong><p>Dívida que você ainda não paga. Deixe quieta, negocie depois. Não use envelope nela.</p></div></div>
+      </div>
     </section>
     <section class="card">
       <div class="card-header"><div><h2>Mapa de dívidas</h2><p>ATACAR recebe a sobra; JUROS mantém o custo em dia; CONGELADA espera negociação.</p></div><button class="button button--primary" type="button" data-action="add-debt">＋ Nova dívida</button></div>
@@ -407,9 +455,9 @@ function renderDebts() {
     <section class="card card--accent">
       <div class="card-header"><div><h2>Recomendação automática</h2><p>Baseada na sobra depois da folga mínima.</p></div></div>
       <div class="card-body">
-        ${calc.nextDebt ? `<div class="callout"><div class="callout-icon">1</div><div><strong>Atacar ${escapeHtml(calc.nextDebt.creditor)}</strong><p>Valor disponível sugerido: ${brl(calc.debtAttack)}. O saldo atual é ${brl(calc.nextDebt.balance)}.</p></div></div>
+        ${calc.nextDebt ? `<div class="callout"><div class="callout-icon">1</div><div><strong>Atacar ${escapeHtml(calc.nextDebt.creditor)}</strong><p>Valor disponível sugerido: ${brl(calc.debtAttack)}. O saldo atual é ${brl(calc.nextDebt.balance)}. ${calc.frozenDebts.length ? `${calc.frozenDebts.length} dívida(s) congelada(s) ficam de fora até você mudar o status.` : ''}</p></div></div>
           <div class="section-gap"><button class="button button--primary" type="button" data-action="apply-attack" data-id="${calc.nextDebt.id}" ${calc.debtAttack <= 0 ? 'disabled' : ''}>Usar ${brl(Math.min(calc.debtAttack, calc.nextDebt.balance))} como pagamento planejado</button></div>`
-          : `<div class="callout"><div class="callout-icon">✓</div><div><strong>Nenhuma dívida na fila ATACAR</strong><p>Você pode reforçar a reserva ou escolher a próxima dívida para negociação.</p></div></div>`}
+          : `<div class="callout"><div class="callout-icon">✓</div><div><strong>Nenhuma dívida na fila ATACAR</strong><p>${calc.frozenDebts.length ? `Há ${calc.frozenDebts.length} congelada(s). Quando negociar, mude para ATACAR. Enquanto isso, fortaleça a reserva.` : 'Você pode reforçar a reserva ou escolher a próxima dívida para negociação.'}</p></div></div>`}
       </div>
     </section>
   </div>`;
@@ -417,12 +465,16 @@ function renderDebts() {
 
 function renderEnvelopes() {
   const calc = calculateMonth(state);
+  const guide = buildGuidance(state);
   return `<div class="grid">
     <section class="card card--dark">
       <div class="card-body">
         <p class="eyebrow" style="color:#86efac">LIMITE DO MÊS</p>
         <div class="hero-footer" style="margin-top:0"><div><strong class="hero-value">${brl(calc.spendBudget)}</strong><span class="hero-kicker">Pode gastar sem mexer nas contas</span></div><div class="hero-action">Já gastou <strong>${brl(calc.envelopeSpent)}</strong>. Ainda pode <strong>${brl(calc.envelopeRemaining)}</strong>.</div></div>
         <div class="progress progress--dark" style="margin-top:22px"><span style="width:${clampPercent(calc.spendBudget > 0 ? calc.envelopeSpent / calc.spendBudget * 100 : 0)}%"></span></div>
+        <p class="coach-note" style="color:#c4d1c8;margin-top:14px">${guide.spendPlan.canSpendFreely
+          ? `Controle: no máximo ${brl(guide.spendPlan.weekLimit)} por semana (~${brl(guide.spendPlan.dayLimit)}/dia). O resto do mês é conta, reserva e dívida.`
+          : 'Sem dinheiro livre seguro neste mês. Qualquer gasto fora do essencial aprofunda o buraco.'}</p>
       </div>
     </section>
     <section class="envelope-grid">
@@ -444,14 +496,26 @@ function renderEnvelopes() {
 }
 
 function renderProjection() {
-  const rows = projection(state);
+  const { rows, debtFreeAt, totalSaved } = projection(state);
   const maxAbs = Math.max(1, ...rows.map((row) => Math.abs(row.surplus)));
   const debtEnd = rows.at(-1)?.remainingDebt || 0;
+  const guide = buildGuidance(state);
   return `<div class="grid">
     <section class="grid grid--3">
       ${metricCard('Sobra mensal atual', rows[0]?.surplus || 0, '⌁', 'Mantendo renda e contas atuais', (rows[0]?.surplus || 0) < 0 ? 'negative' : 'positive')}
-      ${metricCard('Dívida ao final', debtEnd, '◎', 'Estimativa após 24 meses')}
-      ${metricCard('Total guardado', rows.reduce((total, row) => total + row.save, 0), '▣', 'Acumulado projetado', 'positive')}
+      ${metricCard('Dívida ao final', debtEnd, '◎', debtFreeAt ? `Fila ATACAR zera em ${monthLabel(debtFreeAt)}` : 'Estimativa após 24 meses')}
+      ${metricCard('Total guardado', totalSaved, '▣', 'Acumulado projetado', 'positive')}
+    </section>
+    <section class="card card--accent">
+      <div class="card-header"><div><h2>Caminho da liberdade</h2><p>Projeção com a renda e as regras atuais.</p></div></div>
+      <div class="card-body grid grid--2">
+        <div class="callout"><div class="callout-icon">⌁</div><div><strong>${debtFreeAt ? `Dívidas ATACAR zeradas em ${escapeHtml(monthLabel(debtFreeAt))}` : 'Em 24 meses a fila ATACAR ainda não zera'}</strong><p>${debtFreeAt
+          ? 'Depois disso, mude uma CONGELADA para ATACAR ou aumente o % guardado.'
+          : guide.freedomPlan.tripsExtra > 0
+            ? `Aumente cerca de ${guide.freedomPlan.tripsExtra} diária(s)/mês ou corte flexíveis para acelerar.`
+            : 'Ajuste % de ataque, corte flexíveis ou renegocie dívidas congeladas.'}</p></div></div>
+        <div class="callout callout--info"><div class="callout-icon">↗</div><div><strong>${escapeHtml(guide.freedomPlan.headline)}</strong><p>Meta de viagens: fechar ${guide.freedomPlan.tripsToClose ?? '—'} · respirar ${guide.freedomPlan.tripsToBreathe ?? '—'} · liberdade ${guide.freedomPlan.tripsToFreedom ?? '—'}.</p></div></div>
+      </div>
     </section>
     <section class="card">
       <div class="card-header"><div><h2>Sobra projetada por mês</h2><p>Simulação automática; não é promessa de resultado.</p></div><button class="button button--ghost" type="button" data-action="print">Imprimir</button></div>

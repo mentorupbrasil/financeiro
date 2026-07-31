@@ -7,7 +7,7 @@
 3. Escolha o arquivo privado `RESPIRA_DADOS_INICIAIS.json`.
 4. Vá para **Contas** e preencha todos os valores que ainda estão zerados.
 5. Em **Entradas**, informe quantas diárias/viagens você realmente consegue fazer.
-6. Confira a **Visão geral** antes de gastar qualquer valor.
+6. Confira a **Visão geral** antes de gastar qualquer valor — leia o bloco **Orientação do mês**.
 
 ## Ordem correta no dia do pagamento
 
@@ -17,6 +17,22 @@
 4. Separe o valor de guardar.
 5. Defina o pagamento da dívida indicada na fila de ataque.
 6. Use somente o valor dos envelopes como dinheiro livre.
+
+## Dívidas: o que atacar e o que não pagar agora
+
+- **ATACAR** — recebe a sobra. Uma por vez.
+- **JUROS** — pague só o mínimo mensal para não explodir.
+- **CONGELADA** — dívida que você ainda não paga. Negocie depois; não use envelope nela.
+
+## Viagens e liberdade
+
+Na visão geral, compare três metas de diárias:
+
+1. **Fechar** o mês
+2. **Respirar** (folga mínima)
+3. **Liberdade** (reserva + ritmo para zerar a fila ATACAR em ~24 meses)
+
+Cada diária extra mostra quanto vira livre, guardado e ataque à dívida.
 
 ## Toda semana
 
