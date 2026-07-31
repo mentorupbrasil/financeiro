@@ -7,6 +7,8 @@ import {
   advanceInstallmentCommitment,
   createEmptyState,
   currentMonthKey,
+  deleteEntryScope,
+  deleteCommitmentScope,
   ensureMonth,
   formatDateBR,
   history,
@@ -25,7 +27,7 @@ import {
   dueDateInMonth,
 } from './model.js';
 import { APP_PIN } from './config.js';
-import { fetchRemoteState, pingApi, pushRemoteState } from './sync.js';
+import { fetchRemoteState, pushRemoteState } from './sync.js';
 import {
   createVault,
   downloadEncryptedBackup,
@@ -118,12 +120,25 @@ function bindEvents() {
   refs.monthToday.addEventListener('click', () => goToMonth(currentMonthKey()));
   refs.monthLabelBtn.addEventListener('click', () => goToMonth(currentMonthKey()));
   refs.entityForm.addEventListener('submit', handleEntitySubmit);
-  refs.entityDialog.addEventListener('click', (event) => {
+  refs.entityDialog.addEventListener('click', async (event) => {
     if (event.target.closest('[data-close-dialog]')) refs.entityDialog.close();
     const choice = event.target.closest('[data-create-type]');
     if (choice) {
       refs.entityDialog.close();
       setTimeout(() => openCreate(choice.dataset.createType), 60);
+      return;
+    }
+    const del = event.target.closest('[data-action="confirm-delete"]');
+    if (del) {
+      event.preventDefault();
+      const scope = del.dataset.scope || 'one';
+      const targetId = del.dataset.id;
+      const kind = del.dataset.kind || 'entry';
+      refs.entityDialog.close();
+      dialogContext = null;
+      if (kind === 'commitment') deleteCommitmentScope(state, targetId, state.currentMonth, scope);
+      else deleteEntryScope(state, targetId, state.currentMonth, scope);
+      await persist('Excluído', 'Alteração gravada na nuvem.', { requireCloud: true });
     }
   });
   refs.viewRoot.addEventListener('click', handleViewClick);
@@ -176,30 +191,63 @@ async function openWithPin(pin, { quiet = false } = {}) {
   try {
     remote = await fetchRemoteState(pin);
     cloudOnline = true;
-    setSyncStatus('online', 'Nuvem ok');
   } catch (error) {
     cloudOnline = false;
-    setSyncStatus('offline', 'Local');
+    setSyncStatus('error', 'Neon offline');
   }
   if (remote?.state) {
     const remoteState = normalizeState(remote.state);
-    const remoteTime = Date.parse(remoteState.updatedAt || remote.updatedAt || 0) || 0;
+    if (remote.updatedAt) remoteState.updatedAt = new Date(remote.updatedAt).toISOString();
+    const remoteTime = Date.parse(remote.updatedAt || remoteState.updatedAt || 0) || 0;
     const localTime = Date.parse(localState?.updatedAt || 0) || 0;
-    if (!localState || remoteTime >= localTime) {
+    if (!localState || remoteTime > localTime) {
       state = remoteState;
       if (hasVault()) await saveVault(state);
       else await createVault(pin, state);
-    } else {
+      cloudOnline = true;
+      setSyncStatus('online', 'Neon sincronizada');
+    } else if (localTime > remoteTime) {
       state = localState;
-      if (cloudOnline) try { await pushRemoteState(state, pin); } catch {}
+      try {
+        const saved = await pushRemoteState(state, pin);
+        if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+        await saveVault(state);
+        cloudOnline = true;
+        setSyncStatus('online', 'Neon sincronizada');
+      } catch {
+        cloudOnline = false;
+        setSyncStatus('error', 'Falha ao enviar local');
+      }
+    } else {
+      state = localState || remoteState;
+      cloudOnline = true;
+      setSyncStatus('online', 'Neon sincronizada');
     }
   } else if (localState) {
     state = localState;
-    if (cloudOnline) try { await pushRemoteState(state, pin); } catch {}
+    try {
+      const saved = await pushRemoteState(state, pin);
+      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+      await saveVault(state);
+      cloudOnline = true;
+      setSyncStatus('online', 'Neon sincronizada');
+    } catch {
+      cloudOnline = false;
+      setSyncStatus('error', 'Neon desatualizada');
+    }
   } else {
     state = createEmptyState();
     await createVault(pin, state);
-    if (cloudOnline) try { await pushRemoteState(state, pin); } catch {}
+    try {
+      const saved = await pushRemoteState(state, pin);
+      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+      await saveVault(state);
+      cloudOnline = true;
+      setSyncStatus('online', 'Neon sincronizada');
+    } catch {
+      cloudOnline = false;
+      setSyncStatus('error', 'Neon desatualizada');
+    }
     if (!quiet) toast('Pronto', 'Comece pelo botão Adicionar.');
   }
   sessionStorage.setItem(SESSION_FLAG, '1');
@@ -222,7 +270,6 @@ function launchApp() {
   ensureMonth(state, state.currentMonth);
   render();
   resetIdleTimer();
-  pingApi().then((ok) => setSyncStatus(ok ? 'online' : 'offline', ok ? 'Nuvem ok' : 'Local'));
 }
 
 function lockApp() {
@@ -267,7 +314,9 @@ function render() {
 
 function renderOverview() {
   const data = overview(state);
+  const daily = data.daily;
   const proj = projection(state, state.currentMonth, 6);
+  const fmtNeed = (value) => (value == null ? '—' : String(value));
   return `
     <section class="grid grid--4">
       ${metric('Dinheiro disponível', data.available, 'positive')}
@@ -278,6 +327,26 @@ function renderOverview() {
       ${metric('Atrasadas', data.overdueTotal, data.overdueCount ? 'negative' : '')}
       ${metric('Reservado', data.reserved)}
       ${metric('Sobra', data.free, data.free >= 0 ? 'positive' : 'negative')}
+    </section>
+
+    <section class="card section-gap">
+      <div class="card-header"><div><h2>Diárias</h2><p>Meta do mês com base nas regras</p></div></div>
+      <div class="card-body">
+        ${daily.dailyNet <= 0 ? `<div class="callout callout--warning"><div class="callout-icon">!</div><div><strong>Defina o valor líquido da diária</strong><p>Vá em Configurações e informe quanto entra por diária.</p></div></div>` : `
+        <div class="stat-strip">
+          <div><span>Meta mensal</span><strong>${brl(daily.monthlyGoal)}</strong></div>
+          <div><span>Planejadas</span><strong>${fmtNeed(daily.plannedDailies)}</strong></div>
+          <div><span>Ainda faltam</span><strong>${fmtNeed(daily.missing)}</strong></div>
+          <div><span>Valor da diária</span><strong>${brl(daily.dailyNet)}</strong></div>
+        </div>
+        <div class="list" style="margin-top:12px">
+          <div class="list-item"><div class="list-main"><strong>Para pagar as contas</strong></div><div class="list-value">${fmtNeed(daily.needForBills)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Para proteger a margem</strong></div><div class="list-value">${fmtNeed(daily.needForSafety)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Para a meta de guardar</strong></div><div class="list-value">${fmtNeed(daily.needForSave)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Para o fundo das dívidas congeladas</strong></div><div class="list-value">${fmtNeed(daily.needForFrozen)}</div></div>
+          <div class="list-item"><div class="list-main"><strong>Total necessário</strong></div><div class="list-value">${fmtNeed(daily.needForGoal)}</div></div>
+        </div>`}
+      </div>
     </section>
 
     <section class="grid grid--2 section-gap">
@@ -300,16 +369,20 @@ function renderOverview() {
     </section>
 
     <section class="card section-gap">
-      <div class="card-header"><div><h2>Projeção</h2><p>Próximos meses · o que termina · quanto libera</p></div></div>
+      <div class="card-header"><div><h2>Projeção</h2><p>Entradas, saídas, reserva, dívidas e o que termina</p></div></div>
       <div class="card-body">
         ${proj.lightest ? `<p class="muted" style="margin:0 0 12px">Mês mais leve: <strong>${escapeHtml(monthLabel(proj.lightest.monthKey))}</strong> · sai ${brl(proj.lightest.out)}</p>` : ''}
-        <div class="table-wrap"><table class="data-table"><thead><tr><th>Mês</th><th class="number">Entrou (previsto)</th><th class="number">Saiu</th><th class="number">Sobra</th><th class="number">Libera</th><th>Termina</th></tr></thead><tbody>
+        <div class="table-wrap"><table class="data-table"><thead><tr>
+          <th>Mês</th><th class="number">Entra</th><th class="number">Sai</th><th class="number">Reserva</th><th class="number">Dívidas</th><th class="number">Disponível</th><th class="number">Sobra</th><th>Termina</th>
+        </tr></thead><tbody>
           ${proj.rows.map((row) => `<tr>
             <td>${escapeHtml(monthLabel(row.monthKey))}</td>
             <td class="number">${brl(row.income)}</td>
             <td class="number">${brl(row.out)}</td>
+            <td class="number">${brl(row.toReserve)}</td>
+            <td class="number">${brl(row.toDebts)}</td>
+            <td class="number">${brl(row.available)}</td>
             <td class="number"><strong>${brl(row.balance)}</strong></td>
-            <td class="number">${brl(row.released)}</td>
             <td>${row.ending.length ? escapeHtml(row.ending.join(', ')) : '—'}</td>
           </tr>`).join('')}
         </tbody></table></div>
@@ -396,19 +469,23 @@ function renderSettings() {
   const s = state.settings;
   return `<div class="grid grid--settings">
     <section class="card">
-      <div class="card-header"><div><h2>Regras</h2><p>Margem de segurança e bloqueio</p></div></div>
+      <div class="card-header"><div><h2>Regras</h2><p>Diárias, metas e margem</p></div></div>
       <form class="settings-section" data-form="settings">
         <div class="form-grid">
-          <label class="field"><span>Margem de segurança (R$)</span><input name="safetyMargin" type="number" min="0" step="0.01" value="${s.safetyMargin}" required /></label>
+          <label class="field"><span>Valor líquido de uma diária (R$)</span><input name="dailyNetValue" type="number" min="0" step="0.01" value="${s.dailyNetValue || 0}" required /></label>
+          <label class="field"><span>Meta mensal para guardar (R$)</span><input name="saveGoal" type="number" min="0" step="0.01" value="${s.saveGoal || 0}" required /></label>
+          <label class="field"><span>Fundo mensal dívidas congeladas (R$)</span><input name="frozenDebtFund" type="number" min="0" step="0.01" value="${s.frozenDebtFund || 0}" required /></label>
+          <label class="field"><span>Margem mínima de segurança (R$)</span><input name="safetyMargin" type="number" min="0" step="0.01" value="${s.safetyMargin}" required /></label>
           <label class="field"><span>Bloquear após (minutos)</span><input name="lockAfterMinutes" type="number" min="0" max="240" value="${s.lockAfterMinutes}" required /></label>
-          <label class="field span-2"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" /></label>
+          <label class="field"><span>Seu nome</span><input name="ownerName" type="text" maxlength="60" value="${escapeHtml(s.ownerName)}" /></label>
         </div>
         <button class="button button--primary" type="submit">Salvar</button>
       </form>
     </section>
     <section class="card">
-      <div class="card-header"><div><h2>Dados</h2><p>PIN ${APP_PIN} · nuvem Neon</p></div></div>
+      <div class="card-header"><div><h2>Dados</h2><p>PIN ${APP_PIN}</p></div></div>
       <div class="settings-section backup-actions">
+        <div id="sync-banner" class="callout ${cloudOnline ? '' : 'callout--warning'}"><div class="callout-icon">${cloudOnline ? '✓' : '!'}</div><div><strong>${cloudOnline ? 'Neon sincronizada' : 'Neon desatualizada'}</strong><p>${cloudOnline ? 'Último salvamento na nuvem ok.' : 'Salve de novo ou toque em Sincronizar.'}</p></div></div>
         <button class="button button--secondary button--full" type="button" data-action="sync-now">Sincronizar agora</button>
         <button class="button button--primary button--full" type="button" data-action="export-backup">Baixar backup</button>
         <button class="button button--secondary button--full" type="button" data-action="import-data">Importar</button>
@@ -457,6 +534,8 @@ function openCreate(type, entry = null) {
   if (type === 'income') {
     refs.dialogFields.innerHTML = `${common}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
+      <label class="field"><span>Quantidade</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
+      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária/viagem (valor = qtd × líquido da diária)</span></label>
       <label class="check-row span-2"><input name="received" type="checkbox" ${entry?.received || entry?.status === PAY_STATUS.PAID ? 'checked' : ''}/><span>Já recebi</span></label>
       <label class="field span-2"><span>Observação</span><textarea name="note">${escapeHtml(entry?.note || '')}</textarea></label>`;
   } else if (type === 'installment') {
@@ -636,6 +715,7 @@ async function saveCreate(data) {
     payments: [],
     status: PAY_STATUS.PENDING,
   };
+  if (entry.type === ENTRY_TYPES.INCOME) applyIncomeFields(entry, data);
   if (entry.type === ENTRY_TYPES.INCOME && entry.received) {
     entry.payments = [{ id: makeId('pay'), date: entry.dueDate || toISODate(new Date()), amount: entry.amount, method: 'Recebido', note: '' }];
     entry.status = PAY_STATUS.PAID;
@@ -714,11 +794,22 @@ async function saveEdit(data) {
   entry.dueDate = data.dueDate || entry.dueDate;
   entry.note = data.note || '';
   if (entry.type === ENTRY_TYPES.INCOME) {
+    applyIncomeFields(entry, data);
     entry.received = data.received === 'on';
     if (entry.received && !(entry.payments || []).length) {
       entry.payments = [{ id: makeId('pay'), date: entry.dueDate || toISODate(new Date()), amount: entry.amount, method: 'Recebido', note: '' }];
     }
     if (!entry.received) entry.payments = [];
+  }
+}
+
+function applyIncomeFields(entry, data) {
+  entry.isDaily = data.isDaily === 'on';
+  entry.quantity = Math.max(0, Number(data.quantity) || (entry.isDaily ? 1 : 0));
+  if (entry.isDaily) {
+    const dailyNet = Number(state.settings.dailyNetValue) || 0;
+    if (dailyNet > 0 && entry.quantity > 0) entry.amount = Math.round(entry.quantity * dailyNet * 100) / 100;
+    if (!data.category) entry.category = 'Diária';
   }
 }
 
@@ -758,10 +849,7 @@ async function handleViewClick(event) {
     return;
   }
   if (action === 'delete-entry' && entry) {
-    const ok = await confirmDialog('Excluir este item?', entry.name, 'Excluir');
-    if (!ok) return;
-    month.entries = month.entries.filter((item) => item.id !== id);
-    await persist('Excluído', entry.name);
+    openDeleteScope(entry);
     return;
   }
   if (action === 'edit-commitment') {
@@ -814,10 +902,7 @@ async function handleViewClick(event) {
   if (action === 'delete-commitment') {
     const commitment = state.commitments.find((item) => item.id === id);
     if (!commitment) return;
-    const ok = await confirmDialog('Excluir compromisso?', 'Ele deixa de gerar meses futuros.', 'Excluir');
-    if (!ok) return;
-    state.commitments = state.commitments.filter((item) => item.id !== id);
-    await persist('Excluído', commitment.name);
+    openDeleteCommitment(commitment);
     return;
   }
   if (action === 'sync-now') return syncNow();
@@ -859,6 +944,9 @@ async function handleViewSubmit(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(form));
   if (form.dataset.form === 'settings') {
+    state.settings.dailyNetValue = Number(data.dailyNetValue);
+    state.settings.saveGoal = Number(data.saveGoal);
+    state.settings.frozenDebtFund = Number(data.frozenDebtFund);
     state.settings.safetyMargin = Number(data.safetyMargin);
     state.settings.lockAfterMinutes = Number(data.lockAfterMinutes);
     state.settings.ownerName = String(data.ownerName || '').trim();
@@ -885,32 +973,50 @@ async function goToMonth(target) {
   }
   ensureMonth(state, target);
   state.currentMonth = target;
-  await persist('', '');
+  const stamp = state.updatedAt;
+  state = normalizeState(state);
+  state.updatedAt = stamp;
+  await saveVault(state);
+  render();
+  updateMonthNav();
 }
 
 async function handleMonthChange() {
   // mantido por compatibilidade — navegação usa goToMonth
 }
 
-async function persist(title = '', message = '') {
-  if (saving) return;
+async function persist(title = '', message = '', { requireCloud = false } = {}) {
+  if (saving) return false;
   saving = true;
   try {
+    const previousUpdatedAt = state.updatedAt;
     state = normalizeState(state);
+    state.updatedAt = previousUpdatedAt || state.updatedAt;
     state.updatedAt = new Date().toISOString();
     await saveVault(state);
     try {
-      await pushRemoteState(state, APP_PIN);
+      const saved = await pushRemoteState(state, APP_PIN);
+      if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+      await saveVault(state);
       cloudOnline = true;
-      setSyncStatus('online', 'Nuvem ok');
-    } catch {
+      setSyncStatus('online', 'Neon sincronizada');
+      render();
+      if (title) toast(title, message);
+      return true;
+    } catch (error) {
       cloudOnline = false;
-      setSyncStatus('offline', 'Local');
+      setSyncStatus('error', 'Falha no Neon');
+      render();
+      if (requireCloud) {
+        toast('Não gravou na nuvem', error.message, 'error');
+        return false;
+      }
+      toast(title || 'Salvo local', message || 'Neon falhou. Toque em Sincronizar.', title ? 'success' : 'error');
+      return !requireCloud;
     }
-    render();
-    if (title) toast(title, message);
   } catch (error) {
     toast('Erro', error.message, 'error');
+    return false;
   } finally {
     saving = false;
   }
@@ -919,29 +1025,65 @@ async function persist(title = '', message = '') {
 async function syncNow() {
   try {
     const remote = await fetchRemoteState(APP_PIN);
-    cloudOnline = true;
-    if (remote?.state) {
-      const remoteState = normalizeState(remote.state);
-      const remoteTime = Date.parse(remoteState.updatedAt || remote.updatedAt || 0) || 0;
-      const localTime = Date.parse(state.updatedAt || 0) || 0;
-      if (remoteTime > localTime) {
-        state = remoteState;
-        await saveVault(state);
-        render();
-        toast('Sincronizado', 'Versão da nuvem aplicada.');
-      } else {
-        await pushRemoteState(state, APP_PIN);
-        toast('Sincronizado', 'Dados enviados.');
-      }
-    } else {
-      await pushRemoteState(state, APP_PIN);
-      toast('Sincronizado', 'Primeiro envio ok.');
+    const remoteTime = Date.parse(remote.updatedAt || 0) || 0;
+    const localTime = Date.parse(state.updatedAt || 0) || 0;
+    if (remote?.state && remoteTime > localTime) {
+      state = normalizeState(remote.state);
+      if (remote.updatedAt) state.updatedAt = new Date(remote.updatedAt).toISOString();
+      await saveVault(state);
+      cloudOnline = true;
+      setSyncStatus('online', 'Neon sincronizada');
+      render();
+      toast('Sincronizado', 'Versão da nuvem aplicada.');
+      return;
     }
-    setSyncStatus('online', 'Nuvem ok');
+    const saved = await pushRemoteState(state, APP_PIN);
+    if (saved?.updatedAt) state.updatedAt = new Date(saved.updatedAt).toISOString();
+    await saveVault(state);
+    cloudOnline = true;
+    setSyncStatus('online', 'Neon sincronizada');
+    render();
+    toast('Sincronizado', 'Dados enviados.');
   } catch (error) {
-    setSyncStatus('error', 'Falha');
+    cloudOnline = false;
+    setSyncStatus('error', 'Falha no Neon');
+    render();
     toast('Sync falhou', error.message, 'error');
   }
+}
+
+function openDeleteScope(entry) {
+  dialogContext = { mode: 'delete-scope', id: entry.id };
+  refs.dialogEyebrow.textContent = 'EXCLUIR';
+  refs.dialogTitle.textContent = entry.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  const options = entry.commitmentId
+    ? [
+        ['one', 'Só este mês'],
+        ['forward', 'Este e os próximos'],
+        ['all', 'Compromisso completo'],
+      ]
+    : [['one', 'Excluir este lançamento']];
+  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="entry" data-id="${entry.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
+}
+
+function openDeleteCommitment(commitment) {
+  dialogContext = { mode: 'delete-scope', id: commitment.id };
+  refs.dialogEyebrow.textContent = 'EXCLUIR';
+  refs.dialogTitle.textContent = commitment.name;
+  refs.dialogSubmit.classList.add('hidden');
+  refs.dialogFields.className = 'dialog-fields dialog-fields--choices';
+  const options = [
+    ['one', 'Só este mês'],
+    ['forward', 'Este e os próximos'],
+    ['all', 'Compromisso completo'],
+  ];
+  refs.dialogFields.innerHTML = options.map(([scope, label]) => `<button class="choice-card" type="button" data-action="confirm-delete" data-kind="commitment" data-id="${commitment.id}" data-scope="${scope}"><strong>${label}</strong></button>`).join('');
+  hideError(refs.dialogError);
+  refs.entityDialog.showModal();
 }
 
 async function handleImportFile() {
