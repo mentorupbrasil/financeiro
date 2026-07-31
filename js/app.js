@@ -959,18 +959,30 @@ function openCreate(type, entry = null) {
   refs.dialogTitle.textContent = entry ? entry.name : (TYPE_LABEL[type] || 'Item');
   const today = toISODate(new Date());
   if (type === 'income') {
+    const isDaily = Boolean(entry?.isDaily) || String(entry?.category || '').toLowerCase() === 'diária';
+    const category = entry?.category || 'Salário';
     refs.dialogFields.innerHTML = `
-      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Diárias da semana" /></label>
+      <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" placeholder="Ex.: Salário mensal" /></label>
       <label class="field"><span>Valor</span>${moneyInput('amount', entry?.amount ?? '', { required: true })}</label>
-      ${categoryField('income', entry?.category || 'Diária')}
+      ${categoryField('income', category)}
       <label class="field"><span>Data</span><input name="dueDate" type="date" value="${entry?.dueDate || today}" /></label>
       <label class="field"><span>Situação</span><select name="certainty">
         <option value="received" ${entry?.certainty === 'received' || entry?.received ? 'selected' : ''}>Recebida</option>
         <option value="guaranteed" ${entry?.certainty === 'guaranteed' ? 'selected' : ''}>Garantida</option>
         <option value="forecast" ${!entry || entry?.certainty === 'forecast' || (!entry?.received && entry?.certainty !== 'guaranteed' && entry?.certainty !== 'received') ? 'selected' : ''}>Prevista</option>
       </select></label>
-      <label class="field"><span>Qtd. diárias</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
-      <label class="check-row span-2"><input name="isDaily" type="checkbox" ${entry?.isDaily ? 'checked' : ''}/><span>É diária (valor = qtd × líquido)</span></label>`;
+      <div class="span-2 income-daily-fields ${isDaily || category === 'Diária' ? '' : 'hidden'}" data-income-daily>
+        <label class="field"><span>Qtd. diárias</span><input name="quantity" type="number" min="0" step="0.01" value="${entry?.quantity ?? 1}" /></label>
+        <input type="hidden" name="isDaily" value="${isDaily || category === 'Diária' ? 'on' : ''}" data-income-daily-flag />
+      </div>`;
+    const categorySelect = refs.dialogFields.querySelector('[name="category"]');
+    const dailyBlock = refs.dialogFields.querySelector('[data-income-daily]');
+    const dailyFlag = refs.dialogFields.querySelector('[data-income-daily-flag]');
+    categorySelect?.addEventListener('change', () => {
+      const daily = categorySelect.value === 'Diária';
+      dailyBlock?.classList.toggle('hidden', !daily);
+      if (dailyFlag) dailyFlag.value = daily ? 'on' : '';
+    });
   } else if (type === 'installment') {
     refs.dialogFields.innerHTML = `
       <label class="field span-2"><span>Nome</span><input name="name" required value="${escapeHtml(entry?.name || '')}" /></label>
@@ -1347,14 +1359,15 @@ async function saveEdit(data) {
 }
 
 function applyIncomeFields(entry, data) {
-  entry.isDaily = data.isDaily === 'on';
-  entry.quantity = Math.max(0, Number(data.quantity) || (entry.isDaily ? 1 : 0));
+  const daily = data.isDaily === 'on' || data.category === 'Diária';
+  entry.isDaily = daily;
+  entry.quantity = daily ? Math.max(0, Number(data.quantity) || 1) : 0;
   entry.certainty = Object.values(INCOME_CERTAINTY).includes(data.certainty) ? data.certainty : INCOME_CERTAINTY.FORECAST;
   entry.received = entry.certainty === INCOME_CERTAINTY.RECEIVED;
-  if (entry.isDaily) {
+  if (daily) {
     const dailyNet = Number(state.settings.dailyNetValue) || 0;
     if (dailyNet > 0 && entry.quantity > 0) entry.amount = Math.round(entry.quantity * dailyNet * 100) / 100;
-    if (!data.category) entry.category = 'Diária';
+    entry.category = data.category || 'Diária';
   }
   if (entry.certainty === INCOME_CERTAINTY.RECEIVED) {
     if (!(entry.payments || []).length) {
